@@ -20,6 +20,11 @@ struct ImuOrientation {
   float accelMagnitude{0};
   float filteredMagnitude{9.81f};
   bool isMoving{false};
+
+  // Extra debug-friendly motion metrics
+  float accelMagLp{9.81f};
+  float accelMagHp{0};
+  float motionScore{0};
 };
 
 class AccGyro {
@@ -30,6 +35,12 @@ public:
 
 private:
   Adafruit_LSM6DSOX _sox;
-  float _filteredMagnitude{9.81f};
-};
 
+  // Legacy low-pass magnitude (kept for backward compatibility)
+  float _filteredMagnitude{9.81f};
+
+  // Motion detection filters/state
+  float _magLp{9.81f};
+  float _hpAbsLp{0.0f};
+  bool _movingLatched{false};
+};

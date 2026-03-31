@@ -4,6 +4,7 @@
 #include <WiFi.h>
 
 #include "../include/AccGyro.h"
+#include "../include/CrashDetector.h"
 
 // Simple ESP-NOW broadcaster for ESP32
 namespace espNow{
@@ -91,6 +92,33 @@ namespace espNow{
       led::pulse(250);
     }
   }
+
+  // Send a crash alert (separate message type to keep receiver-side parsing simple)
+  void sendCrashAlert(uint32_t crashId, float peakDynamicMps2, const ImuOrientation& o) {
+    char message[128];
+    // Keep it short & parseable.
+    // dynamic is |mag - lp| (m/s^2), roughly "impact/rapid decel intensity".
+    snprintf(message, sizeof(message),
+             "CRASH;id=%lu;peakDyn=%.2f;pitch=%.1f;roll=%.1f;orient=%s;moving=%d",
+             static_cast<unsigned long>(crashId),
+             static_cast<double>(peakDynamicMps2),
+             static_cast<double>(o.pitchDeg),
+             static_cast<double>(o.rollDeg),
+             o.orientationLabel,
+             o.isMoving ? 1 : 0);
+
+    esp_err_t result = esp_now_send(broadcastAddress,
+                                   reinterpret_cast<const uint8_t*>(message),
+                                   strlen(message) + 1);
+    if (result == ESP_OK) {
+      // Distinctive blink pattern: three quick pulses (non-blocking)
+      led::pulse(120);
+    } else {
+      Serial.print("CRASH alert send failed: ");
+      Serial.println(static_cast<int>(result));
+      led::pulse(400);
+    }
+  }
 }
 
 namespace imuPrint {
@@ -106,19 +134,19 @@ namespace imuPrint {
     // Single-line, parseable output (m/s^2 and g)
     constexpr float kG = 9.80665f;
 
-    Serial.print("ax_mps2="); Serial.print(s.ax, 3);
-    Serial.print(";ay_mps2="); Serial.print(s.ay, 3);
-    Serial.print(";az_mps2="); Serial.print(s.az, 3);
+    // Serial.print("ax_mps2="); Serial.print(s.ax, 3);
+    // Serial.print(";ay_mps2="); Serial.print(s.ay, 3);
+    // Serial.print(";az_mps2="); Serial.print(s.az, 3);
 
-    Serial.print(";ax_g="); Serial.print(s.ax / kG, 3);
-    Serial.print(";ay_g="); Serial.print(s.ay / kG, 3);
-    Serial.print(";az_g="); Serial.print(s.az / kG, 3);
+    // Serial.print(";ax_g="); Serial.print(s.ax / kG, 3);
+    // Serial.print(";ay_g="); Serial.print(s.ay / kG, 3);
+    // Serial.print(";az_g="); Serial.print(s.az / kG, 3);
 
     Serial.print(";pitchDeg="); Serial.print(o.pitchDeg, 2);
     Serial.print(";rollDeg="); Serial.print(o.rollDeg, 2);
     Serial.print(";orient="); Serial.print(o.orientationLabel);
-    Serial.print(";mag="); Serial.print(o.accelMagnitude, 3);
-    Serial.print(";magFilt="); Serial.print(o.filteredMagnitude, 3);
+    // Serial.print(";mag="); Serial.print(o.accelMagnitude, 3);
+    // Serial.print(";magFilt="); Serial.print(o.filteredMagnitude, 3);
     Serial.print(";moving="); Serial.println(o.isMoving ? 1 : 0);
   }
 }
@@ -141,8 +169,9 @@ void loop() {
   // keep LED pulses non-blocking
   espNow::led::update();
 
-  // Periodically send messages, non-blocking timing
   const uint32_t now = millis();
+
+  // Periodically send messages, non-blocking timing
   if (now - espNow::lastSendMs >= espNow::kSendPeriodMs) {
     espNow::lastSendMs = now;
     espNow::sendEspNowBroadcast();
@@ -155,6 +184,16 @@ void loop() {
     ImuSample s;
     if (imuPrint::imu.readSample(s)) {
       const ImuOrientation o = imuPrint::imu.computeOrientation(s);
+
+      // Crash detection/update
+      static crash::CrashDetector detector;
+      const crash::CrashEvent ev = detector.update(now, s, o);
+      if (ev.triggered) {
+        Serial.print("CRASH DETECTED;peakDyn=");
+        Serial.println(ev.peakDynamicMps2, 2);
+        espNow::sendCrashAlert(ev.crashId, ev.peakDynamicMps2, o);
+      }
+
       imuPrint::printImuLine(s, o);
     }
   }
