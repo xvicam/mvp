@@ -3,6 +3,8 @@
 #include <esp_wifi.h>
 #include <WiFi.h>
 
+#include "AccGyro.h"
+
 // Simple ESP-NOW broadcaster for ESP32
 namespace espNow{
   // Broadcast MAC address (all 0xFF -> broadcast)
@@ -17,27 +19,32 @@ namespace espNow{
   // Simple message counter to vary payload
   uint32_t messageCounter = 0;
 
+  namespace led {
+    // Non-blocking LED pulse so we don't stall the main loop.
+    uint32_t offAtMs = 0;
+
+    void init() {
+      pinMode(LED_BUILTIN, OUTPUT);
+      digitalWrite(LED_BUILTIN, LOW);
+    }
+
+    void pulse(uint32_t durationMs) {
+      digitalWrite(LED_BUILTIN, HIGH);
+      offAtMs = millis() + durationMs;
+    }
+
+    void update() {
+      if (offAtMs != 0 && static_cast<int32_t>(millis() - offAtMs) >= 0) {
+        digitalWrite(LED_BUILTIN, LOW);
+        offAtMs = 0;
+      }
+    }
+  }
+
   // Initialize serial port and built-in LED
   void initSerialAndLed() {
     Serial.begin(115200);
-    pinMode(LED_BUILTIN, OUTPUT);
-    digitalWrite(LED_BUILTIN, LOW);
-  }
-
-  // Blink the on-board LED briefly to indicate a successful send
-  void blinkOk() {
-    digitalWrite(LED_BUILTIN, HIGH);
-    delay(100);
-    digitalWrite(LED_BUILTIN, LOW);
-    delay(100);
-  }
-
-  // Blink the on-board LED slowly to indicate an error
-  void blinkError() {
-    digitalWrite(LED_BUILTIN, HIGH);
-    delay(1000);
-    digitalWrite(LED_BUILTIN, LOW);
-    delay(1000);
+    led::init();
   }
 
   // Configure WiFi for STA mode and initialise ESP-NOW
@@ -75,28 +82,80 @@ namespace espNow{
     // Send including terminating null (hence +1)
     esp_err_t result = esp_now_send(broadcastAddress, reinterpret_cast<const uint8_t*>(message), strlen(message) + 1);
     if (result == ESP_OK) {
-      // Indicate success with a short LED blink
-      blinkOk();
+      // brief pulse on successful send
+      led::pulse(40);
     } else {
       Serial.print("ESP-NOW send failed: ");
       Serial.println(static_cast<int>(result));
-      blinkError();
+      // longer pulse on error
+      led::pulse(250);
     }
+  }
+}
+
+namespace imuPrint {
+  // Print rate for accelerometer results
+  constexpr uint32_t kPrintPeriodMs = 100;
+  uint32_t lastPrintMs = 0;
+
+  bool initialised = false;
+
+  AccGyro imu;
+
+  static void printImuLine(const ImuSample& s, const ImuOrientation& o) {
+    // Single-line, parseable output (m/s^2 and g)
+    constexpr float kG = 9.80665f;
+
+    Serial.print("ax_mps2="); Serial.print(s.ax, 3);
+    Serial.print(";ay_mps2="); Serial.print(s.ay, 3);
+    Serial.print(";az_mps2="); Serial.print(s.az, 3);
+
+    Serial.print(";ax_g="); Serial.print(s.ax / kG, 3);
+    Serial.print(";ay_g="); Serial.print(s.ay / kG, 3);
+    Serial.print(";az_g="); Serial.print(s.az / kG, 3);
+
+    Serial.print(";pitchDeg="); Serial.print(o.pitchDeg, 2);
+    Serial.print(";rollDeg="); Serial.print(o.rollDeg, 2);
+    Serial.print(";orient="); Serial.print(o.orientationLabel);
+    Serial.print(";mag="); Serial.print(o.accelMagnitude, 3);
+    Serial.print(";magFilt="); Serial.print(o.filteredMagnitude, 3);
+    Serial.print(";moving="); Serial.println(o.isMoving ? 1 : 0);
   }
 }
 
 void setup() {
   // Prepare debugging output and LED
   espNow::initSerialAndLed();
+
   // Initialise ESP-NOW (peer added inside)
   espNow::initEspNow();
+
+  // Initialise accelerometer/IMU
+  imuPrint::initialised = imuPrint::imu.beginI2C();
+  if (!imuPrint::initialised) {
+    Serial.println("IMU init failed; will not print accel results.");
+  }
 }
 
 void loop() {
+  // keep LED pulses non-blocking
+  espNow::led::update();
+
   // Periodically send messages, non-blocking timing
   const uint32_t now = millis();
   if (now - espNow::lastSendMs >= espNow::kSendPeriodMs) {
     espNow::lastSendMs = now;
     espNow::sendEspNowBroadcast();
+  }
+
+  // Periodically print accelerometer results
+  if (imuPrint::initialised && (now - imuPrint::lastPrintMs >= imuPrint::kPrintPeriodMs)) {
+    imuPrint::lastPrintMs = now;
+
+    ImuSample s;
+    if (imuPrint::imu.readSample(s)) {
+      const ImuOrientation o = imuPrint::imu.computeOrientation(s);
+      imuPrint::printImuLine(s, o);
+    }
   }
 }
