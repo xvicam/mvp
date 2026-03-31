@@ -8,6 +8,14 @@ namespace {
 
   // Orientation thresholds (m/s^2). Lower = wider range.
   constexpr float kUprightThreshold = 7.5f;
+
+  // Motion detection tuning.
+  // We track accel magnitude high-pass energy so "tilt" doesn't look like motion.
+  // These numbers assume you're sampling around ~50Hz.
+  constexpr float kMagLpAlpha = 0.08f;     // lower = slower baseline
+  constexpr float kHpAbsLpAlpha = 0.25f;   // smoothing for motion score
+  constexpr float kMoveOn = 0.35f;         // motion score threshold to latch moving (m/s^2)
+  constexpr float kMoveOff = 0.20f;        // lower threshold to unlatch (hysteresis)
 }
 
 bool AccGyro::beginI2C(TwoWire &wire) {
@@ -46,12 +54,28 @@ ImuOrientation AccGyro::computeOrientation(const ImuSample &s) {
 
   o.accelMagnitude = std::sqrt((s.ax * s.ax) + (s.ay * s.ay) + (s.az * s.az));
 
-  // Low-pass filter on magnitude to smooth movement detection.
+  // Legacy low-pass filter on magnitude (kept because other code prints it).
   _filteredMagnitude = (0.2f * o.accelMagnitude) + (0.8f * _filteredMagnitude);
   o.filteredMagnitude = _filteredMagnitude;
 
-  constexpr float movementThreshold = 0.4f;
-  o.isMoving = std::fabs(o.filteredMagnitude - kGravity) > movementThreshold;
+  // Improved motion detection:
+  // - Low-pass the magnitude to estimate the gravity/slow baseline
+  // - High-pass component captures vibration/bumps/vehicle dynamics
+  // - Smooth |HP| into a motion score and apply hysteresis
+  _magLp = (kMagLpAlpha * o.accelMagnitude) + ((1.0f - kMagLpAlpha) * _magLp);
+  const float hp = o.accelMagnitude - _magLp;
+  _hpAbsLp = (kHpAbsLpAlpha * std::fabs(hp)) + ((1.0f - kHpAbsLpAlpha) * _hpAbsLp);
+
+  if (_movingLatched) {
+    if (_hpAbsLp < kMoveOff) _movingLatched = false;
+  } else {
+    if (_hpAbsLp > kMoveOn) _movingLatched = true;
+  }
+
+  o.accelMagLp = _magLp;
+  o.accelMagHp = hp;
+  o.motionScore = _hpAbsLp;
+  o.isMoving = _movingLatched;
 
   return o;
 }
