@@ -3,7 +3,7 @@
 #include <esp_wifi.h>
 #include <WiFi.h>
 
-#include "AccGyro.h"
+#include "../include/AccGyro.h"
 
 // Simple ESP-NOW broadcaster for ESP32
 namespace espNow{
