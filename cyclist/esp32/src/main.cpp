@@ -125,7 +125,6 @@ namespace imuPrint {
 }
 
 namespace ble {
-  static constexpr uint32_t kPasskey = 123456;
   static const NimBLEUUID SVC("1b4d9b4b-9d59-4c4a-8ec6-4f0d8d5cc9e1");
   static const NimBLEUUID CHR("1b4d9b4b-9d59-4c4a-8ec6-4f0d8d5cc9e2");
 
@@ -161,8 +160,7 @@ namespace ble {
     NimBLEDevice::init(name);
     NimBLEDevice::setPower(ESP_PWR_LVL_P9);
     NimBLEDevice::setSecurityAuth(true, true, true);
-    NimBLEDevice::setSecurityIOCap(BLE_HS_IO_DISPLAY_ONLY);
-    NimBLEDevice::setSecurityPasskey(kPasskey);
+    NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
 
     srv = NimBLEDevice::createServer();
     srv->setCallbacks(&cbs);
