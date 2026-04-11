@@ -12,6 +12,7 @@
 namespace sys {
   bool isBonding = false;
   bool bondingCompleteFlag = false;
+  uint32_t bondingStartTime = 0;
 
   void enterBonding();
   void enterOperating();
@@ -199,6 +200,7 @@ namespace ble {
 namespace sys {
   void enterBonding() {
     isBonding = true;
+    bondingStartTime = millis();
     espNow::stopEspNow();
     ble::startAdvertising();
     Serial.println("Entered Bonding Mode.");
@@ -250,6 +252,11 @@ void loop() {
 
   if (sys::bondingCompleteFlag) {
     sys::bondingCompleteFlag = false;
+    sys::enterOperating();
+  }
+
+  if (sys::isBonding && (now - sys::bondingStartTime > 120000)) {
+    Serial.println("Bonding timeout, entering operating mode...");
     sys::enterOperating();
   }
 
