@@ -73,10 +73,16 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
                 val bondState = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.ERROR)
                 
                 Log.d(TAG, "Bond state changed for ${device?.address}: $bondState")
-                
+
+                // ESP32 NimBLE IO capability BLE_HS_IO_NO_INPUT_OUTPUT
                 if (bondState == BluetoothDevice.BOND_BONDED) {
-                    Log.d(TAG, "Device bonded! Discovering services...")
-                    bluetoothGatt?.discoverServices()
+                    if (device != null && device.address == pendingDeviceAddressForNotificationEnable) {
+                        Log.d(TAG, "Device bonded; retrying notification enable")
+                        bluetoothGatt?.let { gatt ->
+                            tryEnableNotifications(gatt)
+                        }
+                        pendingDeviceAddressForNotificationEnable = null
+                    }
                 }
             }
         }
@@ -86,6 +92,10 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
         val filter = IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
         context.registerReceiver(bondStateReceiver, filter)
     }
+
+    // If notification enabling fails due to missing encryption/auth, we remember the target and retry
+    // after pairing/bond completes.
+    private var pendingDeviceAddressForNotificationEnable: String? = null
 
     private val scanCallback = object : ScanCallback() {
         @SuppressLint("MissingPermission")
@@ -161,12 +171,48 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
         
         Log.d(TAG, "Connecting to ${device.address}. Current bond state: ${remoteDevice.bondState}")
 
-        if (remoteDevice.bondState == BluetoothDevice.BOND_NONE) {
-            Log.d(TAG, "Initiating bond...")
-            remoteDevice.createBond()
-        }
-        
+        // For BLE_HS_IO_NO_INPUT_OUTPUT (Just Works) peripheral
         bluetoothGatt = remoteDevice.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun ensureBondIfNeeded(gatt: BluetoothGatt) {
+        val device = gatt.device
+        if (device.bondState == BluetoothDevice.BOND_NONE) {
+            Log.d(TAG, "Auth/encryption required; initiating Just Works pairing (createBond)")
+            device.createBond()
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun tryEnableNotifications(gatt: BluetoothGatt) {
+        val service = gatt.getService(SERVICE_UUID)
+        val characteristic = service?.getCharacteristic(CHARACTERISTIC_UUID)
+        if (characteristic == null) {
+            Log.w(TAG, "Characteristic $CHARACTERISTIC_UUID not found")
+            return
+        }
+
+        Log.d(TAG, "Enabling notifications for $CHARACTERISTIC_UUID")
+        gatt.setCharacteristicNotification(characteristic, true)
+
+        val descriptor = characteristic.getDescriptor(DESCRIPTOR_UUID)
+        if (descriptor == null) {
+            Log.w(TAG, "CCCD descriptor not found")
+            return
+        }
+        @Suppress("DEPRECATION")
+        descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+        @Suppress("DEPRECATION")
+        val ok = gatt.writeDescriptor(descriptor)
+        if (!ok) {
+            Log.w(TAG, "writeDescriptor returned false (will wait for callback / pairing)")
+        }
+    }
+
+    private fun isInsufficientAuth(status: Int): Boolean {
+        return status == BluetoothGatt.GATT_INSUFFICIENT_AUTHENTICATION ||
+            status == BluetoothGatt.GATT_INSUFFICIENT_ENCRYPTION
     }
 
     private val gattCallback = object : BluetoothGattCallback() {
@@ -185,29 +231,37 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
         @SuppressLint("MissingPermission")
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
-                val service = gatt.getService(SERVICE_UUID)
-                val characteristic = service?.getCharacteristic(CHARACTERISTIC_UUID)
-                
-                if (characteristic != null) {
-                    Log.d(TAG, "Enabling notifications for $CHARACTERISTIC_UUID")
-                    gatt.setCharacteristicNotification(characteristic, true)
-                    
-                    val descriptor = characteristic.getDescriptor(DESCRIPTOR_UUID)
-                    if (descriptor != null) {
-                        descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                        gatt.writeDescriptor(descriptor)
-                    }
-                }
+                tryEnableNotifications(gatt)
             }
         }
 
+        @Deprecated("Deprecated in Java")
+        override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
+            if (descriptor.uuid != DESCRIPTOR_UUID) return
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                Log.d(TAG, "Notifications enabled")
+                pendingDeviceAddressForNotificationEnable = null
+                return
+            }
+
+            Log.w(TAG, "Descriptor write failed with status=$status")
+            if (isInsufficientAuth(status)) {
+                // Trigger pairing/bond and retry once bonded.
+                pendingDeviceAddressForNotificationEnable = gatt.device.address
+                ensureBondIfNeeded(gatt)
+            }
+        }
+
+        @Deprecated("Deprecated in Java")
         override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
             if (characteristic.uuid == CHARACTERISTIC_UUID) {
+                @Suppress("DEPRECATION")
                 val rawData = characteristic.value
                 Log.d(TAG, "Received: ${rawData.contentToString()}")
             }
         }
     }
+
 }
 
 object BluetoothScannerProvider {
