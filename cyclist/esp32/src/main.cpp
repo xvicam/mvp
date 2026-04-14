@@ -189,9 +189,29 @@ namespace ble {
     last = nowMs;
     if (srv && srv->getConnectedCount() > 0) {
       uint32_t x = nowMs;
-      chr->setValue(x);
-      chr->notify();
+      // We don't necessarily need to send timestamp ticks anymore, but we can leave it or remove it.
+      // Let's remove the tick value update so we only notify on crash.
     }
+  }
+
+  void sendCrash(uint32_t crashId, float peakDynamicMps2, const ImuOrientation& o) {
+    if (!srv || srv->getConnectedCount() == 0) return;
+    char message[256];
+    // Dummy GPS coordinates
+    float lat = 52.4862;
+    float lng = -1.8904;
+    snprintf(message, sizeof(message),
+             "{\"type\":\"crash\",\"crashId\":%lu,\"peakDyn\":%.2f,\"pitch\":%.1f,\"roll\":%.1f,\"orient\":\"%s\",\"moving\":%s,\"gps\":{\"lat\":%.4f,\"lng\":%.4f}}",
+             static_cast<unsigned long>(crashId),
+             static_cast<double>(peakDynamicMps2),
+             static_cast<double>(o.pitchDeg),
+             static_cast<double>(o.rollDeg),
+             o.orientationLabel,
+             o.isMoving ? "true" : "false",
+             static_cast<double>(lat), static_cast<double>(lng));
+
+    chr->setValue(reinterpret_cast<uint8_t*>(message), strlen(message));
+    chr->notify();
   }
 }
 
@@ -208,6 +228,7 @@ namespace sys {
     isBonding = false;
     ble::stopAdvertising();
     espNow::initEspNow();
+    espNow::lastSendMs = millis(); // Add this line to reset the timer
     Serial.println("Entered Operating Mode. WiFi enabled.");
   }
 }
@@ -226,6 +247,40 @@ void setup() {
 void loop() {
   const uint32_t now = millis();
   espNow::led::update();
+
+  // Add this block to broadcast ESP-NOW periodically when not bonding
+  if (!sys::isBonding && espNow::isInitialised) {
+    if (now - espNow::lastSendMs >= espNow::kSendPeriodMs) {
+      espNow::lastSendMs = now;
+      espNow::sendEspNowBroadcast();
+    }
+  }
+
+  if (Serial.available()) {
+    char c = Serial.read();
+    if (c == 'C' || c == 'c') {
+      ImuOrientation o;
+      o.pitchDeg = 0;
+      o.rollDeg = 0;
+      o.orientationLabel = "Simulated";
+      o.isMoving = false;
+      if (imuPrint::initialised) {
+        ImuSample s;
+        if (imuPrint::imu.readSample(s)) {
+          o = imuPrint::imu.computeOrientation(s);
+        }
+      }
+      ble::sendCrash(9999, 100.0f, o);
+      Serial.println("Simulated crash sent over BLE.");
+    }
+  }
+
+  static uint32_t lastPulseMs = 0;
+  uint32_t pulseInterval = sys::isBonding ? 250 : 2000;
+  if (now - lastPulseMs > pulseInterval) {
+    lastPulseMs = now;
+    espNow::led::pulse(50);
+  }
 
   static uint32_t btnPressTime = 0;
   static bool actionTriggered = false;
@@ -258,11 +313,6 @@ void loop() {
     sys::enterOperating();
   }
 
-  if (!sys::isBonding && now - espNow::lastSendMs >= espNow::kSendPeriodMs) {
-    espNow::lastSendMs = now;
-    espNow::sendEspNowBroadcast();
-  }
-
   if (imuPrint::initialised && (now - imuPrint::lastPrintMs >= imuPrint::kPrintPeriodMs)) {
     imuPrint::lastPrintMs = now;
     ImuSample s;
@@ -273,7 +323,7 @@ void loop() {
       const crash::CrashEvent ev = detector.update(now, s, o);
 
       if (ev.triggered) {
-        espNow::sendCrashAlert(ev.crashId, ev.peakDynamicMps2, o);
+        ble::sendCrash(ev.crashId, ev.peakDynamicMps2, o);
       }
       imuPrint::printImuLine(s, o);
     }
