@@ -1,19 +1,21 @@
 package com.xteam.vicam
 
-import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.flow.collectLatest
 
 @Composable
-fun App() {
-    val scanner = remember { getBluetoothScanner() }
-
+fun CrashDialog() {
+    val scanner = getBluetoothScanner()
+    
     LaunchedEffect(scanner) {
         scanner.crashEvents.collectLatest { event ->
-            println("Crash event received in UI: id=${event.crashId}")
             DeviceManager.activeCrash = event
         }
     }
@@ -22,11 +24,11 @@ fun App() {
     if (crash != null) {
         AlertDialog(
             onDismissRequest = { DeviceManager.activeCrash = null },
-            title = { Text("Crash detected") },
+            title = { Text("Crash Detected!") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("Crash ID: ${crash.crashId}")
-                    Text("Peak dynamic: ${crash.peakDynamicMps2.asFixed(2)} m/s²")
+                    Text("Peak Dynamic: ${crash.peakDynamicMps2.asFixed(2)} m/s²")
                     Text("Pitch: ${crash.pitch.asFixed(1)}°")
                     Text("Roll: ${crash.roll.asFixed(1)}°")
                     Text("Orientation: ${crash.orientation}")
@@ -38,10 +40,14 @@ fun App() {
                 }
             },
             confirmButton = {
-                TextButton(onClick = { DeviceManager.activeCrash = null }) { Text("OK") }
+                TextButton(onClick = { DeviceManager.activeCrash = null }) {
+                    Text("OK")
+                }
             },
             dismissButton = {
-                TextButton(onClick = { DeviceManager.activeCrash = null }) { Text("Dismiss") }
+                TextButton(onClick = { DeviceManager.activeCrash = null }) {
+                    Text("Dismiss")
+                }
             }
         )
     }

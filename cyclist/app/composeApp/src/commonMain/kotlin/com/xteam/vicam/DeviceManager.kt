@@ -8,4 +8,7 @@ import androidx.compose.runtime.setValue
 object DeviceManager {
     val connectedDevices = mutableStateListOf<BicycleDevice>()
     var selectedDevice by mutableStateOf<BicycleDevice?>(null)
+    
+    // Global crash state to be shown across any active screen
+    var activeCrash by mutableStateOf<CrashEvent?>(null)
 }
