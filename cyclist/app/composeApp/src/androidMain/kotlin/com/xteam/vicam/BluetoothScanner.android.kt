@@ -85,7 +85,7 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
                     @Suppress("DEPRECATION")
                     intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
                 }
-                
+
                 if (bondState == BluetoothDevice.BOND_BONDED && device?.address == pendingDeviceAddressForNotificationEnable) {
                     bluetoothGatt?.let { tryEnableNotifications(it) }
                     pendingDeviceAddressForNotificationEnable = null
@@ -105,21 +105,39 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
         @SuppressLint("MissingPermission")
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val device = result.device
-            val name = device.name ?: "Unknown Device"
             val scanRecord = result.scanRecord
+            val deviceNameFallback = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                @Suppress("MissingPermission")
+                device.alias ?: device.name
+            } else {
+                @Suppress("MissingPermission")
+                device.name
+            }
+            val rawName = scanRecord?.deviceName ?: deviceNameFallback ?: "Unknown Device"
             val serviceUuids = scanRecord?.serviceUuids?.map { it.uuid } ?: emptyList()
-            
-            if (name.contains("Cyclist", ignoreCase = true) || 
+
+            // ESP32 devices might fail to broadcast their name. If it has the correct service UUID, default to "VICAM Cyclist".
+            val name = if (rawName == "Unknown Device" && serviceUuids.contains(SERVICE_UUID)) {
+                "ESP32 (Cyclist)"
+            } else {
+                rawName
+            }
+
+            val isAlreadyDiscovered = lastSeenMap.containsKey(device.address)
+            if (isAlreadyDiscovered ||
+                name.contains("Cyclist", ignoreCase = true) ||
                 name.contains("VICAM", ignoreCase = true) ||
+                name.contains("ESP32", ignoreCase = true) ||
                 serviceUuids.contains(SERVICE_UUID)) {
-                
+
                 lastSeenMap[device.address] = System.currentTimeMillis()
                 _discoveredDevices.update { current ->
                     val existingIndex = current.indexOfFirst { it.address == device.address }
                     if (existingIndex != -1) {
                         val existing = current[existingIndex]
-                        if (existing.rssi == result.rssi && existing.name == name) current
-                        else current.toMutableList().apply { set(existingIndex, existing.copy(rssi = result.rssi, name = name)) }
+                        val updatedName = if (name != "Unknown Device") name else existing.name
+                        if (existing.rssi == result.rssi && existing.name == updatedName) current
+                        else current.toMutableList().apply { set(existingIndex, existing.copy(rssi = result.rssi, name = updatedName)) }
                     } else {
                         current + BicycleDevice(name, device.address, result.rssi, SERVICE_UUID.toString())
                     }
@@ -179,6 +197,7 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
             }
         }
 
+        @SuppressLint("MissingPermission")
         @Deprecated("Deprecated in Java")
         override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
             if (descriptor.uuid == DESCRIPTOR_UUID && status != BluetoothGatt.GATT_SUCCESS) {
@@ -218,7 +237,7 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
         try {
             val chunk = rawData.toString(Charsets.UTF_8)
             if (chunk.isBlank()) return
-            
+
             // If a new chunk starts with "{" and our buffer is already populated but incomplete,
             // it's likely a re-send. Clear the buffer.
             if (chunk.startsWith("{") && notifyTextBuffer.isNotEmpty() && !notifyTextBuffer.contains("}")) {
@@ -259,8 +278,8 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
                     try {
                         val event = json.decodeFromString<CrashEvent>(candidate)
                         _crashEvents.tryEmit(event)
-                        mainHandler.post { 
-                            Toast.makeText(context, "CRASH DETECTED (ID: ${event.crashId})", Toast.LENGTH_LONG).show() 
+                        mainHandler.post {
+                            Toast.makeText(context, "CRASH DETECTED (ID: ${event.crashId})", Toast.LENGTH_LONG).show()
                         }
                         handledAny = true
                     } catch (t: Throwable) {
@@ -278,8 +297,8 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
                     Log.d(TAG, "Triggering emergency crash event from partial/truncated data")
                     val fallbackEvent = CrashEvent(crashId = -1, orientation = "TRUNCATED")
                     _crashEvents.tryEmit(fallbackEvent)
-                    mainHandler.post { 
-                        Toast.makeText(context, "CRASH DETECTED (Partial Signal)!", Toast.LENGTH_LONG).show() 
+                    mainHandler.post {
+                        Toast.makeText(context, "CRASH DETECTED (Partial Signal)!", Toast.LENGTH_LONG).show()
                     }
                     // Clear buffer to avoid spamming the fallback
                     notifyTextBuffer.setLength(0)
