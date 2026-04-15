@@ -29,13 +29,12 @@ private const val TAG = "BluetoothScanner"
 class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
     private val bluetoothAdapter: BluetoothAdapter? = context.getSystemService<BluetoothManager>()?.adapter
     private val scanner = bluetoothAdapter?.bluetoothLeScanner
-    private var bluetoothGatt: BluetoothGatt? = null
-
+    private val activeGatts = mutableMapOf<String, BluetoothGatt>()
     // ESP32 UUIDs from the Arduino script
     private val SERVICE_UUID = UUID.fromString("1b4d9b4b-9d59-4c4a-8ec6-4f0d8d5cc9e1")
     private val CHARACTERISTIC_UUID = UUID.fromString("1b4d9b4b-9d59-4c4a-8ec6-4f0d8d5cc9e2")
     private val DESCRIPTOR_UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
-
+    private var lastProcessedCrashId: Long = -1L
     private val _isScanning = MutableStateFlow(false)
     override val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
 
@@ -78,16 +77,20 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
         @SuppressLint("MissingPermission")
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == BluetoothDevice.ACTION_BOND_STATE_CHANGED) {
-                val bondState = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.ERROR)
+                val bondState =
+                    intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.ERROR)
                 val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+                    intent.getParcelableExtra(
+                        BluetoothDevice.EXTRA_DEVICE,
+                        BluetoothDevice::class.java
+                    )
                 } else {
                     @Suppress("DEPRECATION")
                     intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
                 }
 
-                if (bondState == BluetoothDevice.BOND_BONDED && device?.address == pendingDeviceAddressForNotificationEnable) {
-                    bluetoothGatt?.let { tryEnableNotifications(it) }
+                if (bondState == BluetoothDevice.BOND_BONDED && device != null && device.address == pendingDeviceAddressForNotificationEnable) {
+                    activeGatts[device.address]?.let { tryEnableNotifications(it) }
                     pendingDeviceAddressForNotificationEnable = null
                 }
             }
@@ -168,11 +171,13 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
 
     @SuppressLint("MissingPermission")
     override fun connect(device: BicycleDevice) {
-        stopScanning()
         val remoteDevice = bluetoothAdapter?.getRemoteDevice(device.address) ?: return
-        bluetoothGatt = remoteDevice.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
-    }
 
+        // autoConnect = true tells Android to wait in the background and connect instantly
+        // the moment the ESP32 turns its BLE radio back on.
+        val gatt = remoteDevice.connectGatt(context, true, gattCallback, BluetoothDevice.TRANSPORT_LE)
+        activeGatts[device.address] = gatt
+    }
     private val gattCallback = object : BluetoothGattCallback() {
         @SuppressLint("MissingPermission")
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
@@ -277,14 +282,37 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
                 if (candidate.contains("\"crash\"")) {
                     try {
                         val event = json.decodeFromString<CrashEvent>(candidate)
-                        _crashEvents.tryEmit(event)
-                        mainHandler.post {
-                            Toast.makeText(context, "CRASH DETECTED (ID: ${event.crashId})", Toast.LENGTH_LONG).show()
+
+                        // ADD THIS IF STATEMENT to ignore duplicate crash IDs
+                        if (event.crashId != lastProcessedCrashId) {
+                            lastProcessedCrashId = event.crashId
+                            _crashEvents.tryEmit(event)
+                            mainHandler.post {
+                                Toast.makeText(context, "CRASH DETECTED (ID: ${event.crashId})", Toast.LENGTH_LONG).show()
+                            }
                         }
+
                         handledAny = true
                     } catch (t: Throwable) {
                         Log.w(TAG, "Failed to parse JSON: $candidate", t)
                     }
+                }
+            }
+
+            // Also update the fallback trigger below it to prevent spam
+            if (!handledAny && buffered.contains("\"type\":\"crash\"")) {
+                val trimmed = buffered.trim()
+                if (trimmed == "{\"type\":\"crash\",\"cra" || (trimmed.length > 30 && !trimmed.endsWith("}"))) {
+                    Log.d(TAG, "Triggering emergency crash event from partial/truncated data")
+                    if (lastProcessedCrashId != -999L) {
+                        lastProcessedCrashId = -999L
+                        val fallbackEvent = CrashEvent(crashId = -999L, orientation = "TRUNCATED")
+                        _crashEvents.tryEmit(fallbackEvent)
+                        mainHandler.post {
+                            Toast.makeText(context, "CRASH DETECTED (Partial Signal)!", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                    notifyTextBuffer.setLength(0)
                 }
             }
 
@@ -308,6 +336,7 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
             if (lastEnd >= 0) {
                 val remainder = if (lastEnd + 1 < buffered.length) buffered.substring(lastEnd + 1) else ""
                 notifyTextBuffer.setLength(0)
+                notifyTextBuffer.append(remainder)
                 notifyTextBuffer.append(remainder)
             }
         } catch (t: Throwable) {

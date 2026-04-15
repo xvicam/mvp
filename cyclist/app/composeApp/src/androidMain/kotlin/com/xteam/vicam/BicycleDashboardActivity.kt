@@ -32,6 +32,7 @@ class BicycleDashboardActivity : ComponentActivity() {
                             device = device,
                             onDisconnect = {
                                 DeviceManager.connectedDevices.remove(device)
+                                AppPreferences.save(this@BicycleDashboardActivity)
                                 DeviceManager.selectedDevice = null
                                 finish()
                             }

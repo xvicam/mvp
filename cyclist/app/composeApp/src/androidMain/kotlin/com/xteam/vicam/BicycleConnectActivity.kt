@@ -25,6 +25,7 @@ class BicycleConnectActivity : ComponentActivity() {
                             onConnect = { device ->
                                 if (!DeviceManager.connectedDevices.any { it.address == device.address }) {
                                     DeviceManager.connectedDevices.add(device)
+                                    AppPreferences.save(this@BicycleConnectActivity)
                                 }
                                 finish()
                             },

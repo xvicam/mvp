@@ -17,6 +17,24 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.core.content.ContextCompat
+object AppPreferences {
+    fun load(context: android.content.Context) {
+        val prefs = context.getSharedPreferences("vicam_prefs", android.content.Context.MODE_PRIVATE)
+        prefs.getString("saved_devices", "")?.split(";;")?.forEach {
+            val parts = it.split("||")
+            if (parts.size == 2 && DeviceManager.connectedDevices.none { d -> d.address == parts[1] }) {
+                val device = BicycleDevice(parts[0], parts[1], -50, "1b4d9b4b-9d59-4c4a-8ec6-4f0d8d5cc9e1")
+                DeviceManager.connectedDevices.add(device)
+                BluetoothScannerProvider.scanner.connect(device)
+            }
+        }
+    }
+    fun save(context: android.content.Context) {
+        val prefs = context.getSharedPreferences("vicam_prefs", android.content.Context.MODE_PRIVATE)
+        val saved = DeviceManager.connectedDevices.joinToString(";;") { "${it.name}||${it.address}" }
+        prefs.edit().putString("saved_devices", saved).apply()
+    }
+}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -48,7 +66,7 @@ class MainActivity : ComponentActivity() {
         if (permissions.any { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }) {
             requestPermissionLauncher.launch(permissions.toTypedArray())
         }
-
+        AppPreferences.load(this)
         setContent {
             MaterialTheme {
                 Surface(
@@ -62,6 +80,7 @@ class MainActivity : ComponentActivity() {
                                 startActivity(Intent(this@MainActivity, BicycleConnectActivity::class.java))
                             },
                             onDeviceClick = { device ->
+                                BluetoothScannerProvider.scanner.connect(device)
                                 DeviceManager.selectedDevice = device
                                 startActivity(Intent(this@MainActivity, BicycleDashboardActivity::class.java))
                             }

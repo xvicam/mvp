@@ -14,9 +14,14 @@ namespace sys {
     bool bondingCompleteFlag = false;
     uint32_t bondingStartTime = 0;
 
-    void enterBonding();
+    bool isCrashed = false;
+    crash::CrashEvent lastCrash;
+    ImuOrientation lastCrashOrientation;
 
+    void enterBonding();
     void enterOperating();
+    void enterCrashMode(const crash::CrashEvent& ev, const ImuOrientation& o);
+
 }
 
 namespace espNow {
@@ -234,6 +239,15 @@ namespace sys {
         espNow::lastSendMs = millis();
         Serial.println("Entered Operating Mode. WiFi enabled.");
     }
+
+    void enterCrashMode(const crash::CrashEvent& ev, const ImuOrientation& o) {
+        isCrashed = true;
+        lastCrash = ev;
+        lastCrashOrientation = o;
+        espNow::stopEspNow();
+        ble::startAdvertising();
+        Serial.println("CRASH DETECTED! Switched to BLE Mode.");
+    }
 }
 
 void setup() {
@@ -262,21 +276,31 @@ void loop() {
     if (Serial.available()) {
         char c = Serial.read();
         if (c == 'C' || c == 'c') {
-            ImuOrientation o;
-            o.pitchDeg = 0;
-            o.rollDeg = 0;
+            ImuOrientation o{};
             o.orientationLabel = "Simulated";
-            o.isMoving = false;
+
             if (imuPrint::initialised) {
                 ImuSample s;
                 if (imuPrint::imu.readSample(s)) {
                     o = imuPrint::imu.computeOrientation(s);
                 }
             }
-            ble::sendCrash(9999, 100.0f, o);
-            Serial.println("Simulated crash sent over BLE.");
+
+            static uint32_t simCrashId = 1000;
+            crash::CrashEvent mockEv;
+            mockEv.triggered = true;
+            mockEv.crashId = simCrashId++;
+            mockEv.peakDynamicMps2 = o.accelMagnitude;
+
+            if (!sys::isCrashed) {
+                sys::enterCrashMode(mockEv, o);
+                Serial.println("Simulated crash triggered. Switched to BLE Mode.");
+            } else {
+                Serial.println("Already in crash mode.");
+            }
         }
     }
+
 
     static uint32_t lastPulseMs = 0;
     uint32_t pulseInterval = sys::isBonding ? 250 : 2000;
@@ -325,10 +349,17 @@ void loop() {
             static crash::CrashDetector detector;
             const crash::CrashEvent ev = detector.update(now, s, o);
 
-            if (ev.triggered) {
-                ble::sendCrash(ev.crashId, ev.peakDynamicMps2, o);
+            if (ev.triggered && !sys::isCrashed) {
+                sys::enterCrashMode(ev, o);
             }
             imuPrint::printImuLine(s, o);
+        }
+    }
+    if (sys::isCrashed) {
+        static uint32_t lastCrashSend = 0;
+        if (now - lastCrashSend > 1000) {
+            lastCrashSend = now;
+            ble::sendCrash(sys::lastCrash.crashId, sys::lastCrash.peakDynamicMps2, sys::lastCrashOrientation);
         }
     }
 
