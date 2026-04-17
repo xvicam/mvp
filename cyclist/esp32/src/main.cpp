@@ -17,6 +17,8 @@ namespace sys {
     bool isCrashed = false;
     crash::CrashEvent lastCrash;
     ImuOrientation lastCrashOrientation;
+    uint32_t crashModeStartTime = 0;
+    bool crashNotificationAcknowledged = false;
 
     void enterBonding();
     void enterOperating();
@@ -140,12 +142,15 @@ namespace ble {
 
     struct SrvCb : NimBLEServerCallbacks {
         void onConnect(NimBLEServer *s, NimBLEConnInfo &connInfo) override {
+            Serial.printf("BLE Client Connected! Address: %s, Bonded: %d\n", connInfo.getAddress().toString().c_str(), connInfo.isBonded());
             if (hasBonds() && !NimBLEDevice::isBonded(connInfo.getAddress())) {
+                Serial.println("Rejecting unbonded connection.");
                 s->disconnect(connInfo.getConnHandle());
             }
         }
 
         void onDisconnect(NimBLEServer *s, NimBLEConnInfo &connInfo, int reason) override {
+            Serial.printf("BLE Client Disconnected! Reason: %d\n", reason);
             if (sys::isBonding) NimBLEDevice::startAdvertising();
         }
 
@@ -159,6 +164,18 @@ namespace ble {
     };
 
     static SrvCb cbs;
+    
+    struct ChrCb : NimBLECharacteristicCallbacks {
+        void onWrite(NimBLECharacteristic *pCharacteristic, NimBLEConnInfo& connInfo) override {
+            std::string val = pCharacteristic->getValue();
+            if (val.find("ACK") != std::string::npos) {
+                sys::crashNotificationAcknowledged = true;
+                Serial.println("Crash notification acknowledged by APP!");
+            }
+        }
+    };
+    static ChrCb chrCb;
+
     static bool started = false;
 
     void init(const char *name) {
@@ -172,7 +189,8 @@ namespace ble {
         srv->setCallbacks(&cbs);
 
         auto *service = srv->createService(SVC);
-        chr = service->createCharacteristic(CHR, NIMBLE_PROPERTY::NOTIFY);
+        chr = service->createCharacteristic(CHR, NIMBLE_PROPERTY::NOTIFY | NIMBLE_PROPERTY::WRITE);
+        chr->setCallbacks(&chrCb);
         static uint32_t v = 0;
         chr->setValue(v);
 
@@ -203,7 +221,10 @@ namespace ble {
     }
 
     void sendCrash(uint32_t crashId, float peakDynamicMps2, const ImuOrientation &o) {
-        if (!srv || srv->getConnectedCount() == 0) return;
+        if (!srv || srv->getConnectedCount() == 0) {
+            // Serial.println("Skipping sendCrash: no clients connected"); // Optional: uncomment if needed
+            return;
+        }
         char message[256];
         // Dummy GPS coordinates
         float lat = 52.4862;
@@ -234,6 +255,8 @@ namespace sys {
 
     void enterOperating() {
         isBonding = false;
+        isCrashed = false;
+        crashNotificationAcknowledged = false;
         ble::stopAdvertising();
         espNow::initEspNow();
         espNow::lastSendMs = millis();
@@ -242,6 +265,8 @@ namespace sys {
 
     void enterCrashMode(const crash::CrashEvent& ev, const ImuOrientation& o) {
         isCrashed = true;
+        crashModeStartTime = millis();
+        crashNotificationAcknowledged = false;
         lastCrash = ev;
         lastCrashOrientation = o;
         espNow::stopEspNow();
@@ -356,10 +381,15 @@ void loop() {
         }
     }
     if (sys::isCrashed) {
-        static uint32_t lastCrashSend = 0;
-        if (now - lastCrashSend > 1000) {
-            lastCrashSend = now;
-            ble::sendCrash(sys::lastCrash.crashId, sys::lastCrash.peakDynamicMps2, sys::lastCrashOrientation);
+        if (sys::crashNotificationAcknowledged || (millis() - sys::crashModeStartTime > 120000)) {
+            Serial.println("Crash mode ended (ACK received or timeout). Returning to operating mode...");
+            sys::enterOperating();
+        } else {
+            static uint32_t lastCrashSend = 0;
+            if (now - lastCrashSend > 1000) {
+                lastCrashSend = now;
+                ble::sendCrash(sys::lastCrash.crashId, sys::lastCrash.peakDynamicMps2, sys::lastCrashOrientation);
+            }
         }
     }
 

@@ -217,13 +217,13 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
         override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU && characteristic.uuid == CHARACTERISTIC_UUID) {
                 @Suppress("DEPRECATION")
-                handleNotifyBytes(characteristic.value)
+                handleNotifyBytes(gatt, characteristic.value)
             }
         }
 
         override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray) {
             if (characteristic.uuid == CHARACTERISTIC_UUID) {
-                handleNotifyBytes(value)
+                handleNotifyBytes(gatt, value)
             }
         }
     }
@@ -238,7 +238,7 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
         gatt.writeDescriptor(descriptor)
     }
 
-    private fun handleNotifyBytes(rawData: ByteArray) {
+    private fun handleNotifyBytes(gatt: BluetoothGatt, rawData: ByteArray) {
         try {
             val chunk = rawData.toString(Charsets.UTF_8)
             if (chunk.isBlank()) return
@@ -292,6 +292,19 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
                             }
                         }
 
+                        try {
+                            val char = gatt.getService(SERVICE_UUID)?.getCharacteristic(CHARACTERISTIC_UUID)
+                            if (char != null) {
+                                @Suppress("DEPRECATION")
+                                char.value = "ACK".toByteArray()
+                                @Suppress("DEPRECATION")
+                                gatt.writeCharacteristic(char)
+                                Log.d(TAG, "Sent ACK back to ESP32")
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to send ACK", e)
+                        }
+
                         handledAny = true
                     } catch (t: Throwable) {
                         Log.w(TAG, "Failed to parse JSON: $candidate", t)
@@ -312,7 +325,20 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
                             Toast.makeText(context, "CRASH DETECTED (Partial Signal)!", Toast.LENGTH_LONG).show()
                         }
                     }
+                    try {
+                        val char = gatt.getService(SERVICE_UUID)?.getCharacteristic(CHARACTERISTIC_UUID)
+                        if (char != null) {
+                            @Suppress("DEPRECATION")
+                            char.value = "ACK".toByteArray()
+                            @Suppress("DEPRECATION")
+                            gatt.writeCharacteristic(char)
+                            Log.d(TAG, "Sent ACK back to ESP32 (Truncated Fallback)")
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to send ACK", e)
+                    }
                     notifyTextBuffer.setLength(0)
+                    handledAny = true
                 }
             }
 
@@ -327,6 +353,18 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
                     _crashEvents.tryEmit(fallbackEvent)
                     mainHandler.post {
                         Toast.makeText(context, "CRASH DETECTED (Partial Signal)!", Toast.LENGTH_LONG).show()
+                    }
+                    try {
+                        val char = gatt.getService(SERVICE_UUID)?.getCharacteristic(CHARACTERISTIC_UUID)
+                        if (char != null) {
+                            @Suppress("DEPRECATION")
+                            char.value = "ACK".toByteArray()
+                            @Suppress("DEPRECATION")
+                            gatt.writeCharacteristic(char)
+                            Log.d(TAG, "Sent ACK back to ESP32 (Aggressive Fallback)")
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to send ACK", e)
                     }
                     // Clear buffer to avoid spamming the fallback
                     notifyTextBuffer.setLength(0)
