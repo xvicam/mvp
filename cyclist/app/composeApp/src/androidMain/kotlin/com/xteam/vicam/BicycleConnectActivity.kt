@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -19,15 +20,19 @@ class BicycleConnectActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    BicycleConnectScreen(
-                        onConnect = { device ->
-                            if (!DeviceManager.connectedDevices.any { it.address == device.address }) {
-                                DeviceManager.connectedDevices.add(device)
-                            }
-                            finish()
-                        },
-                        onBack = { finish() }
-                    )
+                    Box {
+                        BicycleConnectScreen(
+                            onConnect = { device ->
+                                if (!DeviceManager.connectedDevices.any { it.address == device.address }) {
+                                    DeviceManager.connectedDevices.add(device)
+                                    AppPreferences.save(this@BicycleConnectActivity)
+                                }
+                                finish()
+                            },
+                            onBack = { finish() }
+                        )
+                        CrashDialog()
+                    }
                 }
             }
         }
