@@ -17,6 +17,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.core.content.ContextCompat
+
 object AppPreferences {
     fun load(context: android.content.Context) {
         val prefs = context.getSharedPreferences("vicam_prefs", android.content.Context.MODE_PRIVATE)
@@ -41,6 +42,12 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
 
+        // Initialize Settings Provider before everything else
+        SettingsProviderHolder.provider = AndroidSettingsProvider(applicationContext)
+
+        // Initialize the contact manager
+        ContactManagerProvider.manager = AndroidContactManager(applicationContext)
+
         // Initialize the scanner if not already done
         try {
             BluetoothScannerProvider.scanner
@@ -50,7 +57,8 @@ class MainActivity : ComponentActivity() {
 
         // Request permissions
         val permissions = mutableListOf(
-            Manifest.permission.ACCESS_FINE_LOCATION
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.READ_CONTACTS
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             permissions.add(Manifest.permission.BLUETOOTH_SCAN)
@@ -66,7 +74,9 @@ class MainActivity : ComponentActivity() {
         if (permissions.any { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }) {
             requestPermissionLauncher.launch(permissions.toTypedArray())
         }
+        
         AppPreferences.load(this)
+
         setContent {
             MaterialTheme {
                 Surface(
@@ -83,6 +93,9 @@ class MainActivity : ComponentActivity() {
                                 BluetoothScannerProvider.scanner.connect(device)
                                 DeviceManager.selectedDevice = device
                                 startActivity(Intent(this@MainActivity, BicycleDashboardActivity::class.java))
+                            },
+                            onEmergencyContactsClick = {
+                                startActivity(Intent(this@MainActivity, EmergencyContactsActivity::class.java))
                             }
                         )
                         CrashDialog()
@@ -100,7 +113,8 @@ fun AppAndroidPreview() {
         BicycleListScreen(
             connectedDevices = emptyList(),
             onAddClick = {},
-            onDeviceClick = {}
+            onDeviceClick = {},
+            onEmergencyContactsClick = {}
         )
     }
 }

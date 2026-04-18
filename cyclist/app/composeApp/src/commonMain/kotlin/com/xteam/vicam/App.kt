@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.collectLatest
 
 @Composable
 fun App() {
+    var showEmergencyContacts by remember { mutableStateOf(false) }
     val scanner = remember { getBluetoothScanner() }
 
     LaunchedEffect(scanner) {
@@ -16,6 +17,25 @@ fun App() {
             println("Crash event received in UI: id=${event.crashId}")
             DeviceManager.activeCrash = event
         }
+    }
+
+    if (showEmergencyContacts) {
+        EmergencyContactsScreen(
+            onBack = { showEmergencyContacts = false }
+        )
+    } else {
+        BicycleListScreen(
+            connectedDevices = DeviceManager.connectedDevices,
+            onAddClick = {
+                // For a fully shared app we would route, but this is a stub.
+            },
+            onDeviceClick = { device ->
+                // For a fully shared app we would route, but this is a stub.
+            },
+            onEmergencyContactsClick = {
+                showEmergencyContacts = true
+            }
+        )
     }
 
     val crash = DeviceManager.activeCrash

@@ -173,7 +173,7 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
     override fun connect(device: BicycleDevice) {
         val remoteDevice = bluetoothAdapter?.getRemoteDevice(device.address) ?: return
 
-        // autoConnect tells Android to wait in the background and connect instantly the moment the ESP32 turns its BLE radio back on.
+        // If we already have a connection to this device, skip
         val gatt = remoteDevice.connectGatt(context, true, gattCallback, BluetoothDevice.TRANSPORT_LE)
         activeGatts[device.address] = gatt
     }
@@ -242,7 +242,7 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
             val chunk = rawData.toString(Charsets.UTF_8)
             if (chunk.isBlank()) return
 
-            // If a new chunk starts with "{" and our buffer is already populated but incomplete it's likely a re-send. Clear the buffer.
+            // If we see a new JSON object start but our buffer has unclosed data, discard it to avoid confusion.
             if (chunk.startsWith("{") && notifyTextBuffer.isNotEmpty() && !notifyTextBuffer.contains("}")) {
                 Log.d(TAG, "Partial buffer discarded in favor of new message start: ${notifyTextBuffer.toString()}")
                 notifyTextBuffer.setLength(0)
@@ -342,7 +342,7 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
 
             if (!handledAny && buffered.contains("\"type\":\"crash\"")) {
                 val trimmed = buffered.trim()
-                // If it's the specific truncated 20-byte message or if it's just stuck.
+
                 if (trimmed == "{\"type\":\"crash\",\"cra" || (trimmed.length > 30 && !trimmed.endsWith("}"))) {
                     Log.d(TAG, "Triggering emergency crash event from partial/truncated data")
                     val fallbackEvent = CrashEvent(crashId = -1, orientation = "TRUNCATED")
