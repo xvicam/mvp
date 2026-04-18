@@ -6,16 +6,16 @@ namespace {
   constexpr float kGravity = 9.81f; // m/s^2
   constexpr float kRadToDeg = 180.0f / static_cast<float>(PI);
 
-  // Orientation thresholds (m/s^2). Lower = wider range.
-  constexpr float kUprightThreshold = 7.5f;
+  // Orientation thresholds (m/s^2). Lower = easier to classify as not-upright.
+  constexpr float kUprightThreshold = 8.0f; // was 8.5f
 
   // Motion detection tuning.
-  // We track accel magnitude high-pass energy so "tilt" doesn't look like motion.
-  // These numbers assume you're sampling around ~50Hz.
-  constexpr float kMagLpAlpha = 0.08f;     // lower = slower baseline
-  constexpr float kHpAbsLpAlpha = 0.25f;   // smoothing for motion score
-  constexpr float kMoveOn = 0.35f;         // motion score threshold to latch moving (m/s^2)
-  constexpr float kMoveOff = 0.20f;        // lower threshold to unlatch (hysteresis)
+  // track accel magnitude high-pass energy so "tilt" doesn't look like motion.
+
+  constexpr float kMagLpAlpha = 0.08f;
+  constexpr float kHpAbsLpAlpha = 0.25f;
+  constexpr float kMoveOn = 0.45f;   // was 0.55f
+  constexpr float kMoveOff = 0.28f;  // was 0.35f
 }
 
 bool AccGyro::beginI2C(TwoWire &wire) {

@@ -17,17 +17,16 @@ struct CrashEvent {
 class CrashDetector {
 public:
 
-  float triggerDynamicMps2 = 8.0f;     // ~0.82 g dynamic spike
-  float confirmStillDynMps2 = 1.2f;    // "still" when dynamic below this
+  // Easier-to-trigger defaults for testing/simulation.
+  float triggerDynamicMps2 = 9.0f;      // was 11.0f
+  float confirmStillDynMps2 = 1.0f;     // was 0.8f
 
-  uint32_t candidateHoldMs = 40;       // require spike for at least this long
-  uint32_t postConfirmWindowMs = 800;  // after candidate, look for stillness/orientation
-  uint32_t cooldownMs = 8000;          // suppression after a crash
+  uint32_t candidateHoldMs = 50;        // was 80
+  uint32_t postConfirmWindowMs = 1200; // was 900 (more time to meet conditions)
+  uint32_t cooldownMs = 8000;
 
-  // only trigger if we were moving recently.
-  // Helps avoid "bike picked up and dropped" false positives.
   bool requireMoving = true;
-  uint32_t movingGraceMs = 2000;
+  uint32_t movingGraceMs = 2500;       // was 1200 (more forgiving for testing)
 
   CrashDetector() = default;
 

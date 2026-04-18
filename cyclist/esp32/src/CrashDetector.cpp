@@ -49,7 +49,7 @@ CrashEvent CrashDetector::update(uint32_t nowMs, const ImuSample& /*s*/, const I
 
     case State::Candidate: {
       // If spike persists long enough, move to confirmation window.
-      if (dynamic < (0.7f * triggerDynamicMps2)) {
+      if (dynamic < (0.75f * triggerDynamicMps2)) {
         // dropped too quickly -> likely a bump
         resetToArmed(nowMs);
         return ev;
@@ -63,8 +63,7 @@ CrashEvent CrashDetector::update(uint32_t nowMs, const ImuSample& /*s*/, const I
     }
 
     case State::Confirmed: {
-      // Confirm crash if we observe post-impact stillness OR non-upright orientation.
-      // This filters some high-vibration false positives while still triggering quickly.
+      // Testing-friendly confirmation: stillness OR non-upright orientation.
       const bool isStill = dynamic <= confirmStillDynMps2;
       const bool notUpright = (std::strcmp(o.orientationLabel, "Upright") != 0);
 
@@ -80,7 +79,6 @@ CrashEvent CrashDetector::update(uint32_t nowMs, const ImuSample& /*s*/, const I
       }
 
       if (nowMs - _stateSinceMs >= postConfirmWindowMs) {
-        // didn't confirm within the window
         resetToArmed(nowMs);
       }
       return ev;

@@ -173,8 +173,7 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
     override fun connect(device: BicycleDevice) {
         val remoteDevice = bluetoothAdapter?.getRemoteDevice(device.address) ?: return
 
-        // autoConnect = true tells Android to wait in the background and connect instantly
-        // the moment the ESP32 turns its BLE radio back on.
+        // autoConnect tells Android to wait in the background and connect instantly the moment the ESP32 turns its BLE radio back on.
         val gatt = remoteDevice.connectGatt(context, true, gattCallback, BluetoothDevice.TRANSPORT_LE)
         activeGatts[device.address] = gatt
     }
@@ -243,8 +242,7 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
             val chunk = rawData.toString(Charsets.UTF_8)
             if (chunk.isBlank()) return
 
-            // If a new chunk starts with "{" and our buffer is already populated but incomplete,
-            // it's likely a re-send. Clear the buffer.
+            // If a new chunk starts with "{" and our buffer is already populated but incomplete it's likely a re-send. Clear the buffer.
             if (chunk.startsWith("{") && notifyTextBuffer.isNotEmpty() && !notifyTextBuffer.contains("}")) {
                 Log.d(TAG, "Partial buffer discarded in favor of new message start: ${notifyTextBuffer.toString()}")
                 notifyTextBuffer.setLength(0)
@@ -283,7 +281,7 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
                     try {
                         val event = json.decodeFromString<CrashEvent>(candidate)
 
-                        // ADD THIS IF STATEMENT to ignore duplicate crash IDs
+                        // Ignore duplicate crash IDs
                         if (event.crashId != lastProcessedCrashId) {
                             lastProcessedCrashId = event.crashId
                             _crashEvents.tryEmit(event)
@@ -342,8 +340,6 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
                 }
             }
 
-            // Agressive fallback: if we see "type":"crash" and the buffer is growing without a closing brace,
-            // or if it's the exact 20-byte truncated message the user is seeing.
             if (!handledAny && buffered.contains("\"type\":\"crash\"")) {
                 val trimmed = buffered.trim()
                 // If it's the specific truncated 20-byte message or if it's just stuck.
