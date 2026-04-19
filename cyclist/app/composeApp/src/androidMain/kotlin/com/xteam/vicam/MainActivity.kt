@@ -48,6 +48,9 @@ class MainActivity : ComponentActivity() {
         // Initialize the contact manager
         ContactManagerProvider.manager = AndroidContactManager(applicationContext)
 
+        // Initialize the emergency manager
+        EmergencyManagerProvider.manager = AndroidEmergencyManager(applicationContext)
+
         // Initialize the scanner if not already done
         try {
             BluetoothScannerProvider.scanner
@@ -58,7 +61,8 @@ class MainActivity : ComponentActivity() {
         // Request permissions
         val permissions = mutableListOf(
             Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.READ_CONTACTS
+            Manifest.permission.READ_CONTACTS,
+            Manifest.permission.SEND_SMS
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             permissions.add(Manifest.permission.BLUETOOTH_SCAN)
