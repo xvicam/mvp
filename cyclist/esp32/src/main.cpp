@@ -7,7 +7,7 @@
 #include "../include/AccGyro.h"
 #include "../include/CrashDetector.h"
 
-#define BUTTON_PIN 27
+#define BUTTON_PIN 14
 
 namespace sys {
     bool isBonding = false;
@@ -277,7 +277,7 @@ namespace sys {
 
 void setup() {
     espNow::initSerialAndLed();
-    pinMode(BUTTON_PIN, INPUT_PULLUP);
+    pinMode(BUTTON_PIN, INPUT);
 
     ble::init("VICAM");
 
@@ -336,7 +336,7 @@ void loop() {
 
     static uint32_t btnPressTime = 0;
     static bool actionTriggered = false;
-    if (digitalRead(BUTTON_PIN) == LOW) {
+    if (digitalRead(BUTTON_PIN) == HIGH) {
         if (btnPressTime == 0) {
             btnPressTime = now;
             actionTriggered = false;
