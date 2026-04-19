@@ -7,9 +7,10 @@
 #include "../include/AccGyro.h"
 #include "../include/CrashDetector.h"
 
-#define BUTTON_PIN 27
+#define BUTTON_PIN 14  // Using physical button on D6 (ESP32 GPIO14 )
 
-namespace sys {
+namespace sys
+{
     bool isBonding = false;
     bool bondingCompleteFlag = false;
     uint32_t bondingStartTime = 0;
@@ -23,10 +24,10 @@ namespace sys {
     void enterBonding();
     void enterOperating();
     void enterCrashMode(const crash::CrashEvent& ev, const ImuOrientation& o);
-
 }
 
-namespace espNow {
+namespace espNow
+{
     uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
     esp_now_peer_info_t peerInfo;
     uint32_t lastSendMs = 0;
@@ -34,33 +35,40 @@ namespace espNow {
     uint32_t messageCounter = 0;
     bool isInitialised = false;
 
-    namespace led {
+    namespace led
+    {
         uint32_t offAtMs = 0;
 
-        void init() {
+        void init()
+        {
             pinMode(LED_BUILTIN, OUTPUT);
             digitalWrite(LED_BUILTIN, LOW);
         }
 
-        void pulse(uint32_t durationMs) {
+        void pulse(uint32_t durationMs)
+        {
             digitalWrite(LED_BUILTIN, HIGH);
             offAtMs = millis() + durationMs;
         }
 
-        void update() {
-            if (offAtMs != 0 && millis() >= offAtMs) {
+        void update()
+        {
+            if (offAtMs != 0 && millis() >= offAtMs)
+            {
                 digitalWrite(LED_BUILTIN, LOW);
                 offAtMs = 0;
             }
         }
     }
 
-    void initSerialAndLed() {
+    void initSerialAndLed()
+    {
         Serial.begin(115200);
         led::init();
     }
 
-    bool initEspNow() {
+    bool initEspNow()
+    {
         WiFi.mode(WIFI_STA);
         esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_LR);
         esp_wifi_set_max_tx_power(78);
@@ -78,23 +86,27 @@ namespace espNow {
         return true;
     }
 
-    void stopEspNow() {
-        if (isInitialised) {
+    void stopEspNow()
+    {
+        if (isInitialised)
+        {
             esp_now_deinit();
             WiFi.mode(WIFI_OFF);
             isInitialised = false;
         }
     }
 
-    void sendEspNowBroadcast() {
+    void sendEspNowBroadcast()
+    {
         if (!isInitialised) return;
         char message[64];
         snprintf(message, sizeof(message), "Hello ESP-NOW %lu", static_cast<unsigned long>(messageCounter++));
-        esp_now_send(broadcastAddress, reinterpret_cast<const uint8_t *>(message), strlen(message) + 1);
+        esp_now_send(broadcastAddress, reinterpret_cast<const uint8_t*>(message), strlen(message) + 1);
     }
 
 
-    void sendCrashAlert(uint32_t crashId, float peakDynamicMps2, const ImuOrientation &o) {
+    void sendCrashAlert(uint32_t crashId, float peakDynamicMps2, const ImuOrientation& o)
+    {
         if (!isInitialised) return;
         char message[128];
         snprintf(message, sizeof(message),
@@ -106,21 +118,26 @@ namespace espNow {
                  o.orientationLabel,
                  o.isMoving ? 1 : 0);
 
-        if (esp_now_send(broadcastAddress, reinterpret_cast<const uint8_t *>(message), strlen(message) + 1) == ESP_OK) {
+        if (esp_now_send(broadcastAddress, reinterpret_cast<const uint8_t*>(message), strlen(message) + 1) == ESP_OK)
+        {
             led::pulse(120);
-        } else {
+        }
+        else
+        {
             led::pulse(400);
         }
     }
 }
 
-namespace imuPrint {
+namespace imuPrint
+{
     constexpr uint32_t kPrintPeriodMs = 100;
     uint32_t lastPrintMs = 0;
     bool initialised = false;
     AccGyro imu;
 
-    static void printImuLine(const ImuSample &s, const ImuOrientation &o) {
+    static void printImuLine(const ImuSample& s, const ImuOrientation& o)
+    {
         Serial.print(";pitchDeg=");
         Serial.print(o.pitchDeg, 2);
         Serial.print(";rollDeg=");
@@ -132,53 +149,68 @@ namespace imuPrint {
     }
 }
 
-namespace ble {
+namespace ble
+{
     static const NimBLEUUID SVC("1b4d9b4b-9d59-4c4a-8ec6-4f0d8d5cc9e1");
     static const NimBLEUUID CHR("1b4d9b4b-9d59-4c4a-8ec6-4f0d8d5cc9e2");
 
-    static NimBLEServer *srv;
-    static NimBLECharacteristic *chr;
+    static NimBLEServer* srv;
+    static NimBLECharacteristic* chr;
     static bool hasBonds() { return NimBLEDevice::getNumBonds() > 0; }
 
-    struct SrvCb : NimBLEServerCallbacks {
-        void onConnect(NimBLEServer *s, NimBLEConnInfo &connInfo) override {
-            Serial.printf("BLE Client Connected! Address: %s, Bonded: %d\n", connInfo.getAddress().toString().c_str(), connInfo.isBonded());
-            if (hasBonds() && !NimBLEDevice::isBonded(connInfo.getAddress())) {
+    struct SrvCb : NimBLEServerCallbacks
+    {
+        void onConnect(NimBLEServer* s, NimBLEConnInfo& connInfo) override
+        {
+            Serial.printf("BLE Client Connected! Address: %s, Bonded: %d\n", connInfo.getAddress().toString().c_str(),
+                          connInfo.isBonded());
+            if (hasBonds() && !NimBLEDevice::isBonded(connInfo.getAddress()))
+            {
                 Serial.println("Rejecting unbonded connection.");
                 s->disconnect(connInfo.getConnHandle());
             }
         }
 
-        void onDisconnect(NimBLEServer *s, NimBLEConnInfo &connInfo, int reason) override {
+        void onDisconnect(NimBLEServer* s, NimBLEConnInfo& connInfo, int reason) override
+        {
             Serial.printf("BLE Client Disconnected! Reason: %d\n", reason);
             if (sys::isBonding) NimBLEDevice::startAdvertising();
         }
 
-        void onAuthenticationComplete(NimBLEConnInfo &connInfo) override {
-            if (connInfo.isBonded()) {
+        void onAuthenticationComplete(NimBLEConnInfo& connInfo) override
+        {
+            if (connInfo.isBonded())
+            {
                 sys::bondingCompleteFlag = true;
-            } else if (!connInfo.isEncrypted()) {
+            }
+            else if (!connInfo.isEncrypted())
+            {
                 NimBLEDevice::getServer()->disconnect(connInfo.getConnHandle());
             }
         }
     };
 
     static SrvCb cbs;
-    
-    struct ChrCb : NimBLECharacteristicCallbacks {
-        void onWrite(NimBLECharacteristic *pCharacteristic, NimBLEConnInfo& connInfo) override {
+
+    struct ChrCb : NimBLECharacteristicCallbacks
+    {
+        void onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo) override
+        {
             std::string val = pCharacteristic->getValue();
-            if (val.find("ACK") != std::string::npos) {
+            if (val.find("ACK") != std::string::npos)
+            {
                 sys::crashNotificationAcknowledged = true;
                 Serial.println("Crash notification acknowledged by APP!");
             }
         }
     };
+
     static ChrCb chrCb;
 
     static bool started = false;
 
-    void init(const char *name) {
+    void init(const char* name)
+    {
         if (started) return;
         NimBLEDevice::init(name);
         NimBLEDevice::setPower(ESP_PWR_LVL_P9);
@@ -188,7 +220,7 @@ namespace ble {
         srv = NimBLEDevice::createServer();
         srv->setCallbacks(&cbs);
 
-        auto *service = srv->createService(SVC);
+        auto* service = srv->createService(SVC);
         chr = service->createCharacteristic(CHR, NIMBLE_PROPERTY::NOTIFY | NIMBLE_PROPERTY::WRITE);
         chr->setCallbacks(&chrCb);
         static uint32_t v = 0;
@@ -197,8 +229,9 @@ namespace ble {
         started = true;
     }
 
-    void startAdvertising() {
-        auto *adv = NimBLEDevice::getAdvertising();
+    void startAdvertising()
+    {
+        auto* adv = NimBLEDevice::getAdvertising();
         adv->addServiceUUID(SVC);
 
         // Force the BLE name
@@ -208,20 +241,25 @@ namespace ble {
         adv->start();
     }
 
-    void stopAdvertising() {
+    void stopAdvertising()
+    {
         NimBLEDevice::getAdvertising()->stop();
     }
 
-    void tick(uint32_t nowMs) {
+    void tick(uint32_t nowMs)
+    {
         static uint32_t last = 0;
         if (nowMs - last < 500) return;
         last = nowMs;
-        if (srv && srv->getConnectedCount() > 0) {
+        if (srv && srv->getConnectedCount() > 0)
+        {
         }
     }
 
-    void sendCrash(uint32_t crashId, float peakDynamicMps2, const ImuOrientation &o) {
-        if (!srv || srv->getConnectedCount() == 0) {
+    void sendCrash(uint32_t crashId, float peakDynamicMps2, const ImuOrientation& o)
+    {
+        if (!srv || srv->getConnectedCount() == 0)
+        {
             // Serial.println("Skipping sendCrash: no clients connected"); // Optional: uncomment if needed
             return;
         }
@@ -239,13 +277,15 @@ namespace ble {
                  o.isMoving ? "true" : "false",
                  static_cast<double>(lat), static_cast<double>(lng));
 
-        chr->setValue(reinterpret_cast<uint8_t *>(message), strlen(message));
+        chr->setValue(reinterpret_cast<uint8_t*>(message), strlen(message));
         chr->notify();
     }
 }
 
-namespace sys {
-    void enterBonding() {
+namespace sys
+{
+    void enterBonding()
+    {
         isBonding = true;
         bondingStartTime = millis();
         espNow::stopEspNow();
@@ -253,7 +293,8 @@ namespace sys {
         Serial.println("Entered Bonding Mode.");
     }
 
-    void enterOperating() {
+    void enterOperating()
+    {
         isBonding = false;
         isCrashed = false;
         crashNotificationAcknowledged = false;
@@ -263,7 +304,8 @@ namespace sys {
         Serial.println("Entered Operating Mode. WiFi enabled.");
     }
 
-    void enterCrashMode(const crash::CrashEvent& ev, const ImuOrientation& o) {
+    void enterCrashMode(const crash::CrashEvent& ev, const ImuOrientation& o)
+    {
         isCrashed = true;
         crashModeStartTime = millis();
         crashNotificationAcknowledged = false;
@@ -275,9 +317,10 @@ namespace sys {
     }
 }
 
-void setup() {
+void setup()
+{
     espNow::initSerialAndLed();
-    pinMode(BUTTON_PIN, INPUT_PULLUP);
+    pinMode(BUTTON_PIN, INPUT);
 
     ble::init("VICAM");
 
@@ -286,27 +329,34 @@ void setup() {
     imuPrint::initialised = imuPrint::imu.beginI2C();
 }
 
-void loop() {
+void loop()
+{
     const uint32_t now = millis();
     espNow::led::update();
 
     // Broadcast ESP-NOW periodically when not bonding
-    if (!sys::isBonding && espNow::isInitialised) {
-        if (now - espNow::lastSendMs >= espNow::kSendPeriodMs) {
+    if (!sys::isBonding && espNow::isInitialised)
+    {
+        if (now - espNow::lastSendMs >= espNow::kSendPeriodMs)
+        {
             espNow::lastSendMs = now;
             espNow::sendEspNowBroadcast();
         }
     }
 
-    if (Serial.available()) {
+    if (Serial.available())
+    {
         char c = Serial.read();
-        if (c == 'C' || c == 'c') {
+        if (c == 'C' || c == 'c')
+        {
             ImuOrientation o{};
             o.orientationLabel = "Simulated";
 
-            if (imuPrint::initialised) {
+            if (imuPrint::initialised)
+            {
                 ImuSample s;
-                if (imuPrint::imu.readSample(s)) {
+                if (imuPrint::imu.readSample(s))
+                {
                     o = imuPrint::imu.computeOrientation(s);
                 }
             }
@@ -317,10 +367,13 @@ void loop() {
             mockEv.crashId = simCrashId++;
             mockEv.peakDynamicMps2 = o.accelMagnitude;
 
-            if (!sys::isCrashed) {
+            if (!sys::isCrashed)
+            {
                 sys::enterCrashMode(mockEv, o);
                 Serial.println("Simulated crash triggered. Switched to BLE Mode.");
-            } else {
+            }
+            else
+            {
                 Serial.println("Already in crash mode.");
             }
         }
@@ -329,64 +382,84 @@ void loop() {
 
     static uint32_t lastPulseMs = 0;
     uint32_t pulseInterval = sys::isBonding ? 250 : 2000;
-    if (now - lastPulseMs > pulseInterval) {
+    if (now - lastPulseMs > pulseInterval)
+    {
         lastPulseMs = now;
         espNow::led::pulse(50);
     }
 
     static uint32_t btnPressTime = 0;
     static bool actionTriggered = false;
-    if (digitalRead(BUTTON_PIN) == LOW) {
-        if (btnPressTime == 0) {
+    if (digitalRead(BUTTON_PIN) == HIGH)
+    {
+        if (btnPressTime == 0)
+        {
             btnPressTime = now;
             actionTriggered = false;
-        } else if (now - btnPressTime > 3000 && !actionTriggered) {
+        }
+        else if (now - btnPressTime > 3000 && !actionTriggered)
+        {
             actionTriggered = true;
-            if (!sys::isBonding) {
+            if (!sys::isBonding)
+            {
                 Serial.println("Button held for 3 seconds, entering bonding mode...");
                 sys::enterBonding();
-            } else {
+            }
+            else
+            {
                 Serial.println("Button held for 3 seconds, exiting bonding mode...");
                 sys::enterOperating();
             }
         }
-    } else {
+    }
+    else
+    {
         btnPressTime = 0;
         actionTriggered = false;
     }
 
-    if (sys::bondingCompleteFlag) {
+    if (sys::bondingCompleteFlag)
+    {
         sys::bondingCompleteFlag = false;
         sys::enterOperating();
     }
 
-    if (sys::isBonding && (now - sys::bondingStartTime > 120000)) {
+    if (sys::isBonding && (now - sys::bondingStartTime > 120000))
+    {
         Serial.println("Bonding timeout, entering operating mode...");
         sys::enterOperating();
     }
 
-    if (imuPrint::initialised && (now - imuPrint::lastPrintMs >= imuPrint::kPrintPeriodMs)) {
+    if (imuPrint::initialised && (now - imuPrint::lastPrintMs >= imuPrint::kPrintPeriodMs))
+    {
         imuPrint::lastPrintMs = now;
         ImuSample s;
 
-        if (imuPrint::imu.readSample(s)) {
+        if (imuPrint::imu.readSample(s))
+        {
             const ImuOrientation o = imuPrint::imu.computeOrientation(s);
             static crash::CrashDetector detector;
             const crash::CrashEvent ev = detector.update(now, s, o);
 
-            if (ev.triggered && !sys::isCrashed) {
+            if (ev.triggered && !sys::isCrashed)
+            {
                 sys::enterCrashMode(ev, o);
             }
             imuPrint::printImuLine(s, o);
         }
     }
-    if (sys::isCrashed) {
-        if (sys::crashNotificationAcknowledged || (millis() - sys::crashModeStartTime > 120000)) {
+    if (sys::isCrashed)
+    {
+        if (sys::crashNotificationAcknowledged || (millis() - sys::crashModeStartTime > 120000))
+        {
             Serial.println("Crash mode ended (ACK received or timeout). Returning to operating mode...");
             sys::enterOperating();
-        } else {
+        }
+        else
+        {
             static uint32_t lastCrashSend = 0;
-            if (now - lastCrashSend > 1000) {
+            if (now - lastCrashSend > 1000)
+            {
                 lastCrashSend = now;
                 ble::sendCrash(sys::lastCrash.crashId, sys::lastCrash.peakDynamicMps2, sys::lastCrashOrientation);
             }
