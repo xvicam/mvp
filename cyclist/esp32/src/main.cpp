@@ -164,7 +164,7 @@ namespace ble {
     };
 
     static SrvCb cbs;
-    
+
     struct ChrCb : NimBLECharacteristicCallbacks {
         void onWrite(NimBLECharacteristic *pCharacteristic, NimBLEConnInfo& connInfo) override {
             std::string val = pCharacteristic->getValue();

@@ -30,7 +30,9 @@ fun BicycleListScreen(
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
-            ModalDrawerSheet {
+            ModalDrawerSheet(
+                modifier = Modifier.width(300.dp) // Limit the width so it's not full screen
+            ) {
                 Spacer(Modifier.height(12.dp))
                 Text(
                     "VICAM",

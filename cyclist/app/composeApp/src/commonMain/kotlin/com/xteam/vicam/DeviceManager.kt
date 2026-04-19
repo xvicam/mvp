@@ -24,6 +24,9 @@ object DeviceManager {
     // Global crash state to be shown across any active screen
     var activeCrash by mutableStateOf<CrashEvent?>(null)
 
+    // User's name for emergency messages
+    var userName by mutableStateOf("A cyclist")
+
     // Globally selected emergency contacts
     val emergencyContacts = mutableStateListOf<EmergencyContact>()
 
