@@ -1,4 +1,7 @@
 #include <Arduino.h>
+#if defined(ESP32)
+#include <esp32-hal-ledc.h>
+#endif
 #include <esp_now.h>
 #include <esp_wifi.h>
 #include <WiFi.h>
@@ -8,6 +11,117 @@
 #include "../include/CrashDetector.h"
 
 #define BUTTON_PIN 14
+
+// External RGB LED pins (R,G,B). You said: GPIO 26, 2, 25
+#define RGB_R_PIN 26
+#define RGB_G_PIN 13
+#define RGB_B_PIN 25
+
+// Set true if your RGB LED is common-anode (active LOW). False for common-cathode (active HIGH).
+constexpr bool RGB_COMMON_ANODE = false;
+
+// LEDC API selection:
+// - Arduino-ESP32 v2: ledcSetup + ledcAttachPin + ledcWrite(channel, duty)
+// - Arduino-ESP32 v3: ledcAttach(pin, freq, resolution) -> channel; ledcWrite(channel, duty)
+// PlatformIO may not define ARDUINO_ESP32_RELEASE reliably, so do a conservative feature check.
+#if defined(ESP32)
+  // This project uses Arduino-ESP32 where ledcAttach() exists but ledcSetup/ledcAttachPin may not.
+  // Prefer the new API unconditionally.
+  #define STATUSLED_USE_LEDC_ATTACH 1
+#else
+  #define STATUSLED_USE_LEDC_ATTACH 0
+#endif
+
+namespace statusLed {
+    enum class Mode : uint8_t {
+        Operating,
+        Bonding,
+        Crash
+    };
+
+    static Mode mode = Mode::Operating;
+
+    // LEDC PWM setup (avoid visible flicker)
+    static constexpr uint32_t kPwmFreqHz = 5000;
+    static constexpr uint8_t kPwmResolutionBits = 8; // 0..255
+
+    // Arduino-ESP32 core v3 uses a different LEDC API (no ledcSetup/ledcAttachPin).
+    // We'll support both.
+#if STATUSLED_USE_LEDC_ATTACH
+
+#else
+    // v2 and older: fixed channels and explicit setup
+    static constexpr uint8_t kChR = 0;
+    static constexpr uint8_t kChG = 1;
+    static constexpr uint8_t kChB = 2;
+#endif
+
+    static inline uint8_t applyPolarity(uint8_t v) {
+        return RGB_COMMON_ANODE ? static_cast<uint8_t>(255 - v) : v;
+    }
+
+    static void writeRgb(uint8_t r, uint8_t g, uint8_t b) {
+#if STATUSLED_USE_LEDC_ATTACH
+        ledcWrite(RGB_R_PIN, applyPolarity(r));
+        ledcWrite(RGB_G_PIN, applyPolarity(g));
+        ledcWrite(RGB_B_PIN, applyPolarity(b));
+#else
+        ledcWrite(kChR, applyPolarity(r));
+        ledcWrite(kChG, applyPolarity(g));
+        ledcWrite(kChB, applyPolarity(b));
+#endif
+    }
+    static bool phaseOn(uint32_t nowMs, uint32_t periodMs, uint8_t dutyPct) {
+        if (periodMs == 0) return false;
+        const uint32_t onMs = (static_cast<uint64_t>(periodMs) * dutyPct) / 100;
+        return (nowMs % periodMs) < onMs;
+    }
+
+void init() {
+#if STATUSLED_USE_LEDC_ATTACH
+        ledcAttach(RGB_R_PIN, kPwmFreqHz, kPwmResolutionBits);
+        ledcAttach(RGB_G_PIN, kPwmFreqHz, kPwmResolutionBits);
+        ledcAttach(RGB_B_PIN, kPwmFreqHz, kPwmResolutionBits);
+#else
+        ledcSetup(kChR, kPwmFreqHz, kPwmResolutionBits);
+        ledcSetup(kChG, kPwmFreqHz, kPwmResolutionBits);
+        ledcSetup(kChB, kPwmFreqHz, kPwmResolutionBits);
+
+        ledcAttachPin(RGB_R_PIN, kChR);
+        ledcAttachPin(RGB_G_PIN, kChG);
+        ledcAttachPin(RGB_B_PIN, kChB);
+#endif
+
+        writeRgb(0, 0, 0);
+    }
+    void setMode(Mode m) {
+        mode = m;
+    }
+
+    void update(uint32_t nowMs) {
+        // Requirements:
+        // - Bonding: flash BLUE
+        // - Operating: flash GREEN slowly
+        // - Crash: flash RED
+        switch (mode) {
+            case Mode::Bonding: {
+                const bool on = phaseOn(nowMs, 250, 50); // 4Hz
+                writeRgb(0, 0, on ? 255 : 0);
+                break;
+            }
+            case Mode::Operating: {
+                const bool on = phaseOn(nowMs, 2000, 10); // brief pulse every 2s
+                writeRgb(0, on ? 255 : 0, 0);
+                break;
+            }
+            case Mode::Crash: {
+                const bool on = phaseOn(nowMs, 500, 50); // 1Hz
+                writeRgb(on ? 255 : 0, 0, 0);
+                break;
+            }
+        }
+    }
+}
 
 namespace sys {
     bool isBonding = false;
@@ -197,13 +311,17 @@ namespace ble {
         started = true;
     }
 
-    void startAdvertising() {
+    void startAdvertising(bool isBonding) {
         auto *adv = NimBLEDevice::getAdvertising();
         adv->addServiceUUID(SVC);
 
         // Force the BLE name
         adv->enableScanResponse(true);
         adv->setName("VICAM");
+
+        // 0x02 = General Discoverable (shows in new devices list)
+        // 0 = Non-discoverable (hidden from new devices list)
+        adv->setDiscoverableMode(isBonding ? 0x02 : 0);
 
         adv->start();
     }
@@ -249,7 +367,8 @@ namespace sys {
         isBonding = true;
         bondingStartTime = millis();
         espNow::stopEspNow();
-        ble::startAdvertising();
+        ble::startAdvertising(true);
+        statusLed::setMode(statusLed::Mode::Bonding);
         Serial.println("Entered Bonding Mode.");
     }
 
@@ -260,6 +379,7 @@ namespace sys {
         ble::stopAdvertising();
         espNow::initEspNow();
         espNow::lastSendMs = millis();
+        statusLed::setMode(statusLed::Mode::Operating);
         Serial.println("Entered Operating Mode. WiFi enabled.");
     }
 
@@ -270,7 +390,8 @@ namespace sys {
         lastCrash = ev;
         lastCrashOrientation = o;
         espNow::stopEspNow();
-        ble::startAdvertising();
+        ble::startAdvertising(false);
+        statusLed::setMode(statusLed::Mode::Crash);
         Serial.println("CRASH DETECTED! Switched to BLE Mode.");
     }
 }
@@ -278,6 +399,8 @@ namespace sys {
 void setup() {
     espNow::initSerialAndLed();
     pinMode(BUTTON_PIN, INPUT);
+
+    statusLed::init();
 
     ble::init("VICAM");
 
@@ -289,6 +412,7 @@ void setup() {
 void loop() {
     const uint32_t now = millis();
     espNow::led::update();
+    statusLed::update(now);
 
     // Broadcast ESP-NOW periodically when not bonding
     if (!sys::isBonding && espNow::isInitialised) {
@@ -342,7 +466,9 @@ void loop() {
             actionTriggered = false;
         } else if (now - btnPressTime > 3000 && !actionTriggered) {
             actionTriggered = true;
-            if (!sys::isBonding) {
+            if (sys::isCrashed) {
+                Serial.println("Button held in crash mode, ignoring bonding request...");
+            } else if (!sys::isBonding) {
                 Serial.println("Button held for 3 seconds, entering bonding mode...");
                 sys::enterBonding();
             } else {
