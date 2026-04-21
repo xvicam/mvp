@@ -20,13 +20,7 @@
 // Set true if your RGB LED is common-anode (active LOW). False for common-cathode (active HIGH).
 constexpr bool RGB_COMMON_ANODE = false;
 
-// LEDC API selection:
-// - Arduino-ESP32 v2: ledcSetup + ledcAttachPin + ledcWrite(channel, duty)
-// - Arduino-ESP32 v3: ledcAttach(pin, freq, resolution) -> channel; ledcWrite(channel, duty)
-// PlatformIO may not define ARDUINO_ESP32_RELEASE reliably, so do a conservative feature check.
 #if defined(ESP32)
-  // This project uses Arduino-ESP32 where ledcAttach() exists but ledcSetup/ledcAttachPin may not.
-  // Prefer the new API unconditionally.
   #define STATUSLED_USE_LEDC_ATTACH 1
 #else
   #define STATUSLED_USE_LEDC_ATTACH 0
@@ -45,8 +39,6 @@ namespace statusLed {
     static constexpr uint32_t kPwmFreqHz = 5000;
     static constexpr uint8_t kPwmResolutionBits = 8; // 0..255
 
-    // Arduino-ESP32 core v3 uses a different LEDC API (no ledcSetup/ledcAttachPin).
-    // We'll support both.
 #if STATUSLED_USE_LEDC_ATTACH
 
 #else
