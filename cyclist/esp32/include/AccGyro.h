@@ -33,8 +33,25 @@ public:
   bool readSample(ImuSample &out);
   ImuOrientation computeOrientation(const ImuSample &s);
 
+  // Configure the LSM6DSOX embedded wake-up / inactivity engine.
+  bool configureWakeInactivity(uint8_t inactivitySeconds = 120,
+                               uint8_t wakeThresholdMg = 62,
+                               bool routeToInt1 = true,
+                               bool activeHigh = true,
+                               bool pushPull = true);
+
+  // Read and clear latched interrupt sources (if latched enabled).
+  // Returns true if at least one of the flags is set.
+  bool readWakeInactivitySources(bool &wakeUp, bool &inactivity);
+
+  // disable routed wake/inactivity interrupts.
+  void disableWakeInactivity();
+
 private:
   Adafruit_LSM6DSOX _sox;
+
+  bool writeReg(uint8_t reg, uint8_t value);
+  bool readReg(uint8_t reg, uint8_t &value);
 
   // Legacy low-pass magnitude (kept for backward compatibility)
   float _filteredMagnitude{9.81f};

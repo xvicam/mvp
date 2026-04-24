@@ -6,11 +6,15 @@
 #include <esp_wifi.h>
 #include <WiFi.h>
 #include <NimBLEDevice.h>
+#include <esp_sleep.h>
 
 #include "../include/AccGyro.h"
 #include "../include/CrashDetector.h"
 
 #define BUTTON_PIN 14
+
+// IMU interrupt pin (LSM6DSOX INT1/INT2 wired here)
+#define IMU_INT_PIN 4
 
 // External RGB LED pins (R,G,B). You said: GPIO 26, 2, 25
 #define RGB_R_PIN 26
@@ -132,6 +136,11 @@ namespace sys {
 
 }
 
+// Forward declarations (used by power manager before full namespace definitions)
+namespace ble {
+    void stopAdvertising();
+}
+
 namespace espNow {
     uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
     esp_now_peer_info_t peerInfo;
@@ -235,6 +244,146 @@ namespace imuPrint {
         Serial.print(o.orientationLabel);
         Serial.print(";moving=");
         Serial.println(o.isMoving ? 1 : 0);
+    }
+}
+
+namespace powerMgr {
+    // Policy: sleep when still for 2 minutes, wake on IMU interrupt level.
+    constexpr uint32_t kStillToSleepMs = 2UL * 60UL * 1000UL; // 2 minutes stillness
+
+    // Choose IMU interrupt polarity for ext0 wake.
+
+    constexpr int kWakeLevel = 0; // 1 = HIGH, 0 = LOW
+    constexpr bool kImuIntActiveHigh = (kWakeLevel == 1);
+
+    // Map existing motion detection (computed in AccGyro) to a still-timer.
+    constexpr uint32_t kStillDebounceMs = 3000;
+
+    uint32_t stillSinceMs = 0;
+    uint32_t lastMovingMs = 0;
+    bool armed = false;
+
+    static bool eligibleToSleep() {
+        // Don’t sleep during bonding or while crashed.
+        return (!sys::isBonding) && (!sys::isCrashed) && imuPrint::initialised;
+    }
+
+    void initPin() {
+        // Keep a defined level while sleeping.
+        pinMode(IMU_INT_PIN, (kWakeLevel == 0) ? INPUT_PULLUP : INPUT_PULLDOWN);
+    }
+
+    // Forward declaration (used by spurious-wake filter below)
+    void enterDeepSleep(const char *reason);
+
+    void armImuInterrupt() {
+        if (!imuPrint::initialised) return;
+
+        // Route wake-up + inactivity to INT1 by default.
+        // 187mg (3 steps) rejects more small vibrations while still waking on real movement.
+        const bool ok = imuPrint::imu.configureWakeInactivity(30, 187, true, kImuIntActiveHigh, true);
+        Serial.printf("IMU wake/inactivity config: %s (pin=%d level=%d)\n", ok ? "OK" : "FAIL", IMU_INT_PIN, kWakeLevel);
+    }
+
+    // Ignore EXT0 wake glitches for a short window after boot/wake.
+    // This helps when the IMU interrupt line is still settling or latched.
+    constexpr uint32_t kIgnoreWakeMs = 800;
+    uint32_t ignoreWakeUntilMs = 0;
+
+    // If falsely awake, go back to sleep immediately.
+    static void returnToSleepIfFalseExt0Wake() {
+        const auto cause = esp_sleep_get_wakeup_cause();
+        if (cause != ESP_SLEEP_WAKEUP_EXT0) return;
+        if (!imuPrint::initialised) return;
+
+        const int pinNow = digitalRead(IMU_INT_PIN);
+        const bool pinStillActive = (pinNow == kWakeLevel);
+
+        bool wu = false, inact = false;
+        (void)imuPrint::imu.readWakeInactivitySources(wu, inact);
+
+
+        if (pinStillActive && !wu) {
+            Serial.printf("Spurious EXT0 wake (pin=%d active=%d wu=%d inact=%d). Returning to sleep.\n",
+                          pinNow,
+                          pinStillActive ? 1 : 0,
+                          wu ? 1 : 0,
+                          inact ? 1 : 0);
+            Serial.flush();
+            delay(50);
+            enterDeepSleep("spurious EXT0");
+        }
+    }
+
+    void enterDeepSleep(const char *reason) {
+        Serial.printf("Entering deep sleep (%s)\n", reason ? reason : "");
+
+        // Clear any latched IMU interrupt before sleeping.
+        if (imuPrint::initialised) {
+            bool wu = false, inact = false;
+            (void)imuPrint::imu.readWakeInactivitySources(wu, inact);
+        }
+
+        Serial.printf("IMU_INT_PIN=%d level now=%d (wakeLevel=%d)\n", IMU_INT_PIN, digitalRead(IMU_INT_PIN), kWakeLevel);
+        Serial.flush();
+
+        // Stop radios cleanly.
+        espNow::stopEspNow();
+        ble::stopAdvertising();
+
+        // Configure ext0 wake on IMU interrupt pin.
+        esp_sleep_enable_ext0_wakeup(static_cast<gpio_num_t>(IMU_INT_PIN), kWakeLevel);
+
+        // Give BLE/WiFi stacks a moment to quiesce and let Serial flush.
+        delay(200);
+        esp_deep_sleep_start();
+    }
+
+    void onBootPrintWakeReason() {
+        const auto cause = esp_sleep_get_wakeup_cause();
+        Serial.print("Wake cause: ");
+        switch (cause) {
+            case ESP_SLEEP_WAKEUP_EXT0: Serial.println("EXT0 (IMU interrupt)"); break;
+            case ESP_SLEEP_WAKEUP_TIMER: Serial.println("TIMER"); break;
+            case ESP_SLEEP_WAKEUP_UNDEFINED: Serial.println("POWERON/RESET"); break;
+            default: Serial.printf("%d\n", static_cast<int>(cause)); break;
+        }
+    }
+
+    void update(uint32_t nowMs, bool isMoving) {
+        if (ignoreWakeUntilMs != 0 && nowMs < ignoreWakeUntilMs) {
+            return;
+        }
+        if (!eligibleToSleep()) {
+            armed = false;
+            stillSinceMs = 0;
+            return;
+        }
+
+        if (!armed) {
+            armImuInterrupt();
+            armed = true;
+            lastMovingMs = nowMs;
+            stillSinceMs = 0;
+        }
+
+        if (isMoving) {
+            lastMovingMs = nowMs;
+            stillSinceMs = 0;
+            return;
+        }
+
+        // not moving
+        if (stillSinceMs == 0) {
+            // require a short debounce interval after last detected movement
+            if (nowMs - lastMovingMs >= kStillDebounceMs) {
+                stillSinceMs = nowMs;
+            }
+            return;
+        }
+        if (nowMs - stillSinceMs >= kStillToSleepMs) {
+            enterDeepSleep("still threshold reached");
+        }
     }
 }
 
@@ -392,13 +541,27 @@ void setup() {
     espNow::initSerialAndLed();
     pinMode(BUTTON_PIN, INPUT);
 
+    powerMgr::initPin();
+
     statusLed::init();
 
     ble::init("VICAM");
 
+    powerMgr::onBootPrintWakeReason();
+
     sys::enterOperating();
 
     imuPrint::initialised = imuPrint::imu.beginI2C();
+
+    // Configure IMU interrupts as early as possible (required for wake).
+    if (imuPrint::initialised) {
+        powerMgr::armImuInterrupt();
+        powerMgr::ignoreWakeUntilMs = millis() + powerMgr::kIgnoreWakeMs;
+        // If the ESP32 woke from EXT0 but the IMU doesn't report WU_IA, go back to sleep.
+        powerMgr::returnToSleepIfFalseExt0Wake();
+    } else {
+        Serial.println("IMU init failed; sleep-on-still disabled.");
+    }
 }
 
 void loop() {
@@ -496,6 +659,9 @@ void loop() {
                 sys::enterCrashMode(ev, o);
             }
             imuPrint::printImuLine(s, o);
+
+            // Update sleep manager using motion classification.
+            powerMgr::update(now, o.isMoving);
         }
     }
     if (sys::isCrashed) {
