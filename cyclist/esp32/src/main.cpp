@@ -10,6 +10,7 @@
 
 #include "../include/AccGyro.h"
 #include "../include/CrashDetector.h"
+#include "../include/Gnss.h"
 
 #define BUTTON_PIN 14
 
@@ -485,18 +486,27 @@ namespace ble {
             return;
         }
         char message[256];
-        // Dummy GPS coordinates
-        float lat = 52.4862;
-        float lng = -1.8904;
+
+        const gnss::Fix fix = gnss::lastFix();
+        const bool gpsValid = gnss::hasFix(30000);
+        const uint32_t gpsAgeMs = fix.updatedAtMs == 0 ? 0 : (millis() - fix.updatedAtMs);
+
+        // Keep JSON backwards compatible by always including gps.lat/lng, but add gps.valid/age/sats.
+        const double lat = gpsValid ? fix.latDeg : 0.0;
+        const double lng = gpsValid ? fix.lngDeg : 0.0;
         snprintf(message, sizeof(message),
-                 "{\"type\":\"crash\",\"crashId\":%lu,\"peakDyn\":%.2f,\"pitch\":%.1f,\"roll\":%.1f,\"orient\":\"%s\",\"moving\":%s,\"gps\":{\"lat\":%.4f,\"lng\":%.4f}}",
+                 "{\"type\":\"crash\",\"crashId\":%lu,\"peakDyn\":%.2f,\"pitch\":%.1f,\"roll\":%.1f,\"orient\":\"%s\",\"moving\":%s,\"gps\":{\"lat\":%.7f,\"lng\":%.7f,\"valid\":%s,\"ageMs\":%lu,\"satsUsed\":%u}}",
                  static_cast<unsigned long>(crashId),
                  static_cast<double>(peakDynamicMps2),
                  static_cast<double>(o.pitchDeg),
                  static_cast<double>(o.rollDeg),
                  o.orientationLabel,
                  o.isMoving ? "true" : "false",
-                 static_cast<double>(lat), static_cast<double>(lng));
+                 static_cast<double>(lat),
+                 static_cast<double>(lng),
+                 gpsValid ? "true" : "false",
+                 static_cast<unsigned long>(gpsAgeMs),
+                 static_cast<unsigned int>(fix.satsUsed));
 
         chr->setValue(reinterpret_cast<uint8_t *>(message), strlen(message));
         chr->notify();
@@ -547,6 +557,9 @@ void setup() {
 
     ble::init("VICAM");
 
+    const bool gnssOk = gnss::init();
+    Serial.println(gnssOk ? "GNSS init OK" : "GNSS init FAILED (check wiring/I2C addr)" );
+
     powerMgr::onBootPrintWakeReason();
 
     sys::enterOperating();
@@ -568,6 +581,8 @@ void loop() {
     const uint32_t now = millis();
     espNow::led::update();
     statusLed::update(now);
+
+    gnss::update(now);
 
     // Broadcast ESP-NOW periodically when not bonding
     if (!sys::isBonding && espNow::isInitialised) {
