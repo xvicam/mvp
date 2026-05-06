@@ -10,6 +10,10 @@
 
 namespace debug_log {
     void print_debug() {
+        if (state_controller::get_current_mode() == Mode::Manual) {
+            return;
+        }
+
         static uint32_t last_debug_ms = 0;
 
         if (millis() - last_debug_ms < config::debug_interval_ms) {
