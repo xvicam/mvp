@@ -91,4 +91,98 @@ namespace vehicle_reader {
 
         return true;
     }
+
+    void print_gps_data() {
+        Serial.println();
+        Serial.println("========== GPS DATA ==========");
+
+        Serial.print("Chars processed: ");
+        Serial.println(gps.charsProcessed());
+
+        Serial.print("Passed checksum: ");
+        Serial.println(gps.passedChecksum());
+
+        Serial.print("Failed checksum: ");
+        Serial.println(gps.failedChecksum());
+
+        Serial.print("GPS valid: ");
+        Serial.println(is_vehicle_gps_valid() ? "yes" : "no");
+
+        Serial.print("Location valid: ");
+        Serial.println(gps.location.isValid() ? "yes" : "no");
+
+        Serial.print("Location age: ");
+        Serial.print(gps.location.age());
+        Serial.println(" ms");
+
+        if (gps.location.isValid()) {
+            Serial.print("Lat: ");
+            Serial.println(gps.location.lat(), 6);
+
+            Serial.print("Lng: ");
+            Serial.println(gps.location.lng(), 6);
+        } else {
+            Serial.println("Lat: unavailable");
+            Serial.println("Lng: unavailable");
+        }
+
+        Serial.print("Speed: ");
+        if (gps.speed.isValid()) {
+            Serial.print(gps.speed.kmph());
+            Serial.println(" km/h");
+        } else {
+            Serial.println("unavailable");
+        }
+
+        Serial.print("Course: ");
+        if (gps.course.isValid()) {
+            Serial.print(gps.course.deg());
+            Serial.println(" deg");
+        } else {
+            Serial.println("unavailable");
+        }
+
+        Serial.print("Satellites: ");
+        if (gps.satellites.isValid()) {
+            Serial.println(gps.satellites.value());
+        } else {
+            Serial.println("unavailable");
+        }
+
+        Serial.print("HDOP: ");
+        if (gps.hdop.isValid()) {
+            Serial.println(gps.hdop.hdop());
+        } else {
+            Serial.println("unavailable");
+        }
+
+        Serial.print("Altitude: ");
+        if (gps.altitude.isValid()) {
+            Serial.print(gps.altitude.meters());
+            Serial.println(" m");
+        } else {
+            Serial.println("unavailable");
+        }
+
+        Serial.print("UTC time: ");
+        if (gps.time.isValid()) {
+            char time_buffer[12];
+
+            snprintf(
+            time_buffer,
+            sizeof(time_buffer),
+            "%02d:%02d:%02d",
+            gps.time.hour(),
+            gps.time.minute(),
+            gps.time.second()
+            );
+
+            Serial.println(time_buffer);
+        } else {
+            Serial.println("unavailable");
+        }
+
+        Serial.println("==============================");
+        Serial.println();
+        }
 }

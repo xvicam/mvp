@@ -1,5 +1,6 @@
 #include "serial_control.h"
 #include "state_controller.h"
+#include "vehicle_reader.h"
 #include "types.h"
 
 #include <Arduino.h>
@@ -15,6 +16,11 @@ namespace serial_control {
 
             if (c == 'M' || c == 'm') {
                 state_controller::toggle_mode();
+                continue;
+            }
+
+            if (c == 'G' || c == 'g') {
+                vehicle_reader::print_gps_data();
                 continue;
             }
 

@@ -17,4 +17,6 @@ namespace vehicle_reader {
     VehicleData get_vehicle_data();
 
     bool get_utc_time(char* buffer, size_t buffer_size);
+
+    void print_gps_data();
 }
