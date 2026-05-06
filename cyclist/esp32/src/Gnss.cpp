@@ -53,14 +53,23 @@ namespace gnss {
     const sLonLat_t lon = g_gnss.getLon();
     const uint8_t sats = g_gnss.getNumSatUsed();
 
-    const double latDeg = lat.latitudeDegree;
-    const double lngDeg = lon.lonitudeDegree;
+    double latDeg = lat.latitudeDegree;
+    double lngDeg = lon.lonitudeDegree;
+
+    bool isSouth = (lat.latDirection == 'S' || lat.latDirection == 1 || lat.latDirection == '1' || lon.latDirection == 'S');
+    bool isWest  = (lon.lonDirection == 'W' || lon.lonDirection == 1 || lon.lonDirection == '1' ||
+                    lat.lonDirection == 'W' || lat.lonDirection == 1 || lat.lonDirection == '1' ||
+                    lon.latDirection == 'W');
+
+    if (isSouth) latDeg = -latDeg;
+    if (isWest)  lngDeg = -lngDeg;
 
     const bool ok = (sats > 0) && isValidCoord(latDeg, lngDeg);
     if (ok) {
       g_last.valid = true;
       g_last.latDeg = latDeg;
       g_last.lngDeg = lngDeg;
+      g_last.altMeters = g_gnss.getAlt();
       g_last.satsUsed = sats;
       g_last.updatedAtMs = nowMs;
     } else {

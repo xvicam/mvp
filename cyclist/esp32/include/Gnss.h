@@ -7,6 +7,7 @@ namespace gnss {
     bool valid;
     double latDeg;
     double lngDeg;
+    double altMeters{0.0}; // altitude in meters
     uint8_t satsUsed;
     uint32_t updatedAtMs;
   };

@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <cmath>
 #if defined(ESP32)
 #include <esp32-hal-ledc.h>
 #endif
@@ -21,6 +22,7 @@
 #define RGB_R_PIN 26
 #define RGB_G_PIN 13
 #define RGB_B_PIN 25
+#define batteryPin A2
 
 // Set true if your RGB LED is common-anode (active LOW). False for common-cathode (active HIGH).
 constexpr bool RGB_COMMON_ANODE = false;
@@ -146,6 +148,9 @@ namespace espNow {
     uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
     esp_now_peer_info_t peerInfo;
     uint32_t lastSendMs = 0;
+    // Store the most recent IMU sample for broadcast
+    ImuSample lastImuSample{};
+    gnss::Fix previousFix{};
     constexpr uint32_t kSendPeriodMs = 250;
     uint32_t messageCounter = 0;
     bool isInitialised = false;
@@ -204,8 +209,41 @@ namespace espNow {
 
     void sendEspNowBroadcast() {
         if (!isInitialised) return;
-        char message[64];
-        snprintf(message, sizeof(message), "Hello ESP-NOW %lu", static_cast<unsigned long>(messageCounter++));
+        // Updated broadcast with GPS, IMU data and heading
+        const gnss::Fix currentFix = gnss::lastFix();
+        const bool gpsValid = gnss::hasFix(30000);
+        float ax = lastImuSample.ax;
+        float ay = lastImuSample.ay;
+        float az = lastImuSample.az;
+        float gx = lastImuSample.gx;
+        float gy = lastImuSample.gy;
+        float gz = lastImuSample.gz;
+        float accelMag = sqrt(ax*ax + ay*ay + az*az);
+        float speed = 0.0f; // Placeholder for speed calculation
+        // Compute heading from previous fix if available
+        float headingDeg = 0.0f;
+        if (gpsValid && espNow::previousFix.valid) {
+            const double kPi = 3.14159265358979323846;
+            double lat1 = espNow::previousFix.latDeg * kPi / 180.0;
+            double lon1 = espNow::previousFix.lngDeg * kPi / 180.0;
+            double lat2 = currentFix.latDeg * kPi / 180.0;
+            double lon2 = currentFix.lngDeg * kPi / 180.0;
+            double dLon = lon2 - lon1;
+            double y = sin(dLon) * cos(lat2);
+            double x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon);
+            double bearing = atan2(y, x);
+            bearing = fmod((bearing * 180.0 / kPi) + 360.0, 360.0);
+            headingDeg = static_cast<float>(bearing);
+        }
+        // Update previous fix for next calculation
+        espNow::previousFix = currentFix;
+        char message[256];
+        snprintf(message, sizeof(message),
+                "{\"lat\":%.7f,\"lng\":%.7f,\"alt\":%.2f,\"ax\":%.2f,\"ay\":%.2f,\"az\":%.2f,\"gx\":%.2f,\"gy\":%.2f,\"gz\":%.2f,\"speed\":%.2f,\"accel\":%.2f,\"heading\":%.2f}",
+                gpsValid ? currentFix.latDeg : 0.0,
+                gpsValid ? currentFix.lngDeg : 0.0,
+                gpsValid ? currentFix.altMeters : 0.0,
+                ax, ay, az, gx, gy, gz, speed, accelMag, headingDeg);
         esp_now_send(broadcastAddress, reinterpret_cast<const uint8_t *>(message), strlen(message) + 1);
     }
 
@@ -598,6 +636,9 @@ void setup() {
     } else {
         Serial.println("IMU init failed; sleep-on-still disabled.");
     }
+
+    analogReadResolution(12);
+
 }
 
 void loop() {
@@ -607,7 +648,6 @@ void loop() {
 
     gnss::update(now);
 
-    // Broadcast ESP-NOW periodically when not bonding
     if (!sys::isBonding && espNow::isInitialised) {
         if (now - espNow::lastSendMs >= espNow::kSendPeriodMs) {
             espNow::lastSendMs = now;
@@ -624,6 +664,7 @@ void loop() {
             if (imuPrint::initialised) {
                 ImuSample s;
                 if (imuPrint::imu.readSample(s)) {
+                    espNow::lastImuSample = s;
                     o = imuPrint::imu.computeOrientation(s);
                 }
             }
@@ -642,7 +683,6 @@ void loop() {
             }
         }
     }
-
 
     static uint32_t lastPulseMs = 0;
     uint32_t pulseInterval = sys::isBonding ? 250 : 2000;
@@ -689,6 +729,7 @@ void loop() {
         ImuSample s;
 
         if (imuPrint::imu.readSample(s)) {
+            espNow::lastImuSample = s;
             const ImuOrientation o = imuPrint::imu.computeOrientation(s);
             static crash::CrashDetector detector;
             const crash::CrashEvent ev = detector.update(now, s, o);
@@ -696,12 +737,29 @@ void loop() {
             if (ev.triggered && !sys::isCrashed) {
                 sys::enterCrashMode(ev, o);
             }
+
+            const gnss::Fix fix = gnss::lastFix();
+            if (gnss::hasFix(30000)) {
+                Serial.printf("GPS - Lat: %.7f, Lng: %.7f, Alt: %.2f | ", fix.latDeg, fix.lngDeg, fix.altMeters);
+            } else {
+                Serial.print("GPS - Waiting for fix... | ");
+            }
+
+            int rawValue = analogRead(batteryPin);
+            float voltage = (rawValue / 4095.0) * 3.3 * 2.0;
+            float percentage = (voltage - 3.3) / (4.2 - 3.3) * 100;
+
+            if (percentage > 100) percentage = 100;
+            if (percentage < 0) percentage = 0;
+
+            Serial.printf("Voltage: %.2fV | Percentage: %.1f%% ", voltage, percentage);
+
             imuPrint::printImuLine(s, o);
 
-            // Update sleep manager using motion classification.
             powerMgr::update(now, o.isMoving);
         }
     }
+
     if (sys::isCrashed) {
         if (sys::crashNotificationAcknowledged || (millis() - sys::crashModeStartTime > 120000)) {
             Serial.println("Crash mode ended (ACK received or timeout). Returning to operating mode...");
