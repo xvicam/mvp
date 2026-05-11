@@ -304,6 +304,22 @@ namespace powerMgr {
     // Map existing motion detection (computed in AccGyro) to a still-timer.
     constexpr uint32_t kStillDebounceMs = 3000;
 
+    enum class SleepReason : uint8_t {
+        Unknown = 0,
+        Button = 1,
+        Still = 2
+    };
+
+    RTC_DATA_ATTR uint8_t lastSleepReason = static_cast<uint8_t>(SleepReason::Unknown);
+
+    static SleepReason getLastSleepReason() {
+        return static_cast<SleepReason>(lastSleepReason);
+    }
+
+    static void setLastSleepReason(SleepReason r) {
+        lastSleepReason = static_cast<uint8_t>(r);
+    }
+
     uint32_t stillSinceMs = 0;
     uint32_t lastMovingMs = 0;
     bool armed = false;
@@ -321,7 +337,7 @@ namespace powerMgr {
     }
 
     // Forward declaration (used by spurious-wake filter below)
-    void enterDeepSleep(const char *reason);
+    void enterDeepSleep(const char *reason, SleepReason sleepReason);
 
     void armImuInterrupt() {
         if (!imuPrint::initialised) return;
@@ -362,11 +378,11 @@ namespace powerMgr {
                           inact ? 1 : 0);
             Serial.flush();
             delay(50);
-            enterDeepSleep("spurious EXT");
+            enterDeepSleep("spurious EXT", SleepReason::Unknown);
         }
     }
 
-    void enterDeepSleep(const char *reason) {
+    void enterDeepSleep(const char *reason, SleepReason sleepReason) {
         Serial.printf("Entering deep sleep (%s)\n", reason ? reason : "");
 
         // Clear any latched IMU interrupt before sleeping.
@@ -374,6 +390,18 @@ namespace powerMgr {
             bool wu = false, inact = false;
             (void)imuPrint::imu.readWakeInactivitySources(wu, inact);
         }
+
+        const uint32_t waitStartMs = millis();
+        bool warned = false;
+        while (digitalRead(BUTTON_PIN) == kButtonWakeLevel) {
+            if (!warned && (millis() - waitStartMs) > 1000) {
+                Serial.println("Waiting for button release before sleep...");
+                warned = true;
+            }
+            delay(10);
+        }
+
+        setLastSleepReason(sleepReason);
 
         Serial.printf("IMU_INT_PIN=%d level now=%d (wakeLevel=%d)\n", IMU_INT_PIN, digitalRead(IMU_INT_PIN), kImuWakeLevel);
         Serial.printf("BUTTON_PIN=%d level now=%d (wakeLevel=%d)\n", BUTTON_PIN, digitalRead(BUTTON_PIN), kButtonWakeLevel);
@@ -383,8 +411,12 @@ namespace powerMgr {
         espNow::stopEspNow();
         ble::stopAdvertising();
 
-        // Configure EXT1 wake on IMU interrupt pin OR button.
-        const uint64_t wakeMask = (1ULL << IMU_INT_PIN) | (1ULL << BUTTON_PIN);
+        const bool buttonOnlyWake = (sleepReason == SleepReason::Button);
+        uint64_t wakeMask = (1ULL << BUTTON_PIN);
+        if (!buttonOnlyWake) {
+            wakeMask |= (1ULL << IMU_INT_PIN);
+        }
+
         if (kImuWakeLevel == 1 || kButtonWakeLevel == 1) {
             esp_sleep_enable_ext1_wakeup(wakeMask, ESP_EXT1_WAKEUP_ANY_HIGH);
         } else {
@@ -412,6 +444,39 @@ namespace powerMgr {
             case ESP_SLEEP_WAKEUP_UNDEFINED: Serial.println("POWERON/RESET"); break;
             default: Serial.printf("%d\n", static_cast<int>(cause)); break;
         }
+    }
+
+    void enforceHoldToWakeFromButtonOrStill() {
+        const SleepReason lastReason = getLastSleepReason();
+        if (lastReason != SleepReason::Button && lastReason != SleepReason::Still) return;
+        if (esp_sleep_get_wakeup_cause() != ESP_SLEEP_WAKEUP_EXT1) return;
+
+        const uint64_t mask = esp_sleep_get_ext1_wakeup_status();
+        if ((mask & (1ULL << BUTTON_PIN)) == 0) return;
+
+        constexpr uint32_t kWakeHoldMs = 2000;
+        constexpr uint32_t kPollDelayMs = 2;
+
+        if (digitalRead(BUTTON_PIN) != kButtonWakeLevel) {
+            Serial.println("Wake hold not detected, returning to sleep...");
+            enterDeepSleep("wake hold not met", lastReason);
+        }
+
+        const uint32_t startMs = millis();
+        const uint32_t deadlineMs = startMs + kWakeHoldMs;
+
+        while (digitalRead(BUTTON_PIN) == kButtonWakeLevel) {
+            const uint32_t nowMs = millis();
+            if (static_cast<int32_t>(nowMs - deadlineMs) >= 0) {
+                Serial.println("Wake hold satisfied.");
+                setLastSleepReason(SleepReason::Unknown);
+                return;
+            }
+            delay(kPollDelayMs);
+        }
+
+        Serial.println("Wake hold released early, returning to sleep...");
+        enterDeepSleep("wake hold not met", lastReason);
     }
 
     void update(uint32_t nowMs, bool isMoving) {
@@ -446,7 +511,7 @@ namespace powerMgr {
             return;
         }
         if (nowMs - stillSinceMs >= kStillToSleepMs) {
-            enterDeepSleep("still threshold reached");
+            enterDeepSleep("still threshold reached", SleepReason::Still);
         }
     }
 }
@@ -622,6 +687,7 @@ void setup() {
     Serial.println(gnssOk ? "GNSS init OK" : "GNSS init FAILED (check wiring/I2C addr)" );
 
     powerMgr::onBootPrintWakeReason();
+    powerMgr::enforceHoldToWakeFromButtonOrStill();
 
     sys::enterOperating();
 
@@ -691,28 +757,63 @@ void loop() {
         espNow::led::pulse(50);
     }
 
-    static uint32_t btnPressTime = 0;
-    static bool actionTriggered = false;
-    if (digitalRead(BUTTON_PIN) == HIGH) {
-        if (btnPressTime == 0) {
-            btnPressTime = now;
-            actionTriggered = false;
-        } else if (now - btnPressTime > 3000 && !actionTriggered) {
-            actionTriggered = true;
-            if (sys::isCrashed) {
-                Serial.println("Button held in crash mode, ignoring bonding request...");
-            } else if (!sys::isBonding) {
-                Serial.println("Button held for 3 seconds, entering bonding mode...");
-                sys::enterBonding();
-            } else {
-                Serial.println("Button held for 3 seconds, exiting bonding mode...");
-                sys::enterOperating();
-            }
-        }
-    } else {
-        btnPressTime = 0;
-        actionTriggered = false;
+    static constexpr uint32_t kButtonLongPressMs = 2000;
+    static constexpr uint32_t kButtonCrashLongPressMs = 5000;
+    static constexpr uint32_t kButtonDoublePressGapMs = 400;
+    static constexpr uint32_t kButtonDebounceMs = 30;
+
+    static bool btnPrev = false;
+    static uint32_t btnDownAt = 0;
+    static uint32_t lastReleaseAt = 0;
+    static uint8_t pressCount = 0;
+    static bool longPressHandled = false;
+
+    const bool btnNow = (digitalRead(BUTTON_PIN) == HIGH);
+
+    if (btnNow && !btnPrev) {
+        btnDownAt = now;
+        longPressHandled = false;
     }
+
+    if (!btnNow && btnPrev) {
+        const uint32_t heldMs = (btnDownAt != 0) ? (now - btnDownAt) : 0;
+        if (!longPressHandled && heldMs >= kButtonDebounceMs) {
+            pressCount = static_cast<uint8_t>(pressCount + 1);
+            lastReleaseAt = now;
+        }
+        btnDownAt = 0;
+    }
+
+    if (btnNow && !longPressHandled && btnDownAt != 0) {
+        const uint32_t holdMs = sys::isCrashed ? kButtonCrashLongPressMs : kButtonLongPressMs;
+        if ((now - btnDownAt) >= holdMs) {
+            longPressHandled = true;
+            pressCount = 0;
+            Serial.println(sys::isCrashed
+                ? "Button held for 5 seconds in crash mode, entering deep sleep..."
+                : "Button held for 2 seconds, entering deep sleep...");
+            powerMgr::enterDeepSleep("button long press", powerMgr::SleepReason::Button);
+        }
+    }
+
+    if (pressCount == 1 && (now - lastReleaseAt) > kButtonDoublePressGapMs) {
+        pressCount = 0;
+    }
+
+    if (pressCount >= 2) {
+        pressCount = 0;
+        if (sys::isCrashed) {
+            Serial.println("Button double-press in crash mode, ignoring bonding request...");
+        } else if (!sys::isBonding) {
+            Serial.println("Button double-pressed, entering bonding mode...");
+            sys::enterBonding();
+        } else {
+            Serial.println("Button double-pressed, exiting bonding mode...");
+            sys::enterOperating();
+        }
+    }
+
+    btnPrev = btnNow;
 
     if (sys::bondingCompleteFlag) {
         sys::bondingCompleteFlag = false;
