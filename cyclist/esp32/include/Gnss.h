@@ -8,6 +8,7 @@ namespace gnss {
     double latDeg;
     double lngDeg;
     double altMeters{0.0}; // altitude in meters
+    float headingDeg{0.0f}; // true heading from GNSS module
     uint8_t satsUsed;
     uint32_t updatedAtMs;
   };
