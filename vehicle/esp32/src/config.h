@@ -8,8 +8,8 @@ namespace config {
     constexpr uint8_t green_pin = 13;
     constexpr uint8_t blue_pin = 14;
     constexpr uint8_t motor_pin = 25;
-    constexpr uint8_t gps_tx_pin = 16;
-    constexpr uint8_t gps_rx_pin = 17;
+    constexpr uint8_t gps_tx_pin = 17; //blue
+    constexpr uint8_t gps_rx_pin = 16; //yellow
 
     constexpr uint32_t serial_baud = 115200;
     constexpr uint32_t gps_baud = 9600;
