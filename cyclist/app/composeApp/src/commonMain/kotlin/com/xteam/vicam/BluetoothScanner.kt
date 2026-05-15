@@ -27,6 +27,8 @@ interface BluetoothScanner {
     fun startScanning(filterUuid: String? = null)
     fun stopScanning()
     fun connect(device: BicycleDevice)
+    fun sendCommand(deviceAddress: String, command: String)
+    fun sendSensitivity(sensitivity: Float)
 }
 
 @Serializable
@@ -46,5 +48,9 @@ data class GpsLocation(
     val lat: Double = 0.0,
     val lng: Double = 0.0
 )
+
+object BluetoothScannerProvider {
+    lateinit var scanner: BluetoothScanner
+}
 
 expect fun getBluetoothScanner(): BluetoothScanner
