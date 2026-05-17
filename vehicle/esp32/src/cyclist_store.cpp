@@ -55,7 +55,12 @@ namespace cyclist_store {
         }
     }
 
-    bool parse_cyclist_packet(const uint8_t mac[6], const char* json) {
+    bool parse_cyclist_packet(
+        const uint8_t mac[6],
+        const char* json,
+        bool has_rssi,
+        int8_t rssi_dbm
+    ) {
         StaticJsonDocument<256> doc;
 
         DeserializationError error = deserializeJson(doc, json);
@@ -95,11 +100,28 @@ namespace cyclist_store {
             index = find_oldest_cyclist_slot();
         }
 
+        bool had_rssi = cyclists[index].has_rssi;
+        float previous_smoothed_rssi = cyclists[index].rssi_smoothed_dbm;
+
         cyclists[index].is_active = true;
         memcpy(cyclists[index].mac, mac, 6);
         cyclists[index].lat = lat;
         cyclists[index].lng = lng;
         cyclists[index].speed_kmph = speed_kmph;
+        cyclists[index].has_rssi = has_rssi;
+        cyclists[index].rssi_dbm = rssi_dbm;
+
+        if (has_rssi) {
+            if (!had_rssi) {
+                cyclists[index].rssi_smoothed_dbm = static_cast<float>(rssi_dbm);
+            } else {
+                float alpha = config::rssi_smoothing_alpha;
+                cyclists[index].rssi_smoothed_dbm =
+                    (alpha * static_cast<float>(rssi_dbm)) +
+                    ((1.0f - alpha) * previous_smoothed_rssi);
+            }
+        }
+
         cyclists[index].last_seen_ms = millis();
 
         return true;

@@ -25,11 +25,18 @@ namespace state_controller {
     }
 
     void toggle_mode() {
-        if (current_mode == Mode::Real) {
-            current_mode = Mode::Manual;
-            current_state = manual_state;
-        } else {
-            current_mode = Mode::Real;
+        switch (current_mode) {
+            case Mode::Real:
+                current_mode = Mode::Signal;
+                break;
+            case Mode::Signal:
+                current_mode = Mode::Manual;
+                current_state = manual_state;
+                break;
+            case Mode::Manual:
+            default:
+                current_mode = Mode::Real;
+                break;
         }
 
         Serial.print("Mode switched to: ");

@@ -4,7 +4,12 @@
 
 namespace helpers {
     const char* mode_name(Mode mode) {
-        return mode == Mode::Real ? "REAL" : "MANUAL";
+        switch (mode) {
+            case Mode::Real: return "REAL";
+            case Mode::Signal: return "SIGNAL";
+            case Mode::Manual: return "MANUAL";
+            default: return "UNKNOWN";
+        }
     }
 
     const char* state_name(State state) {

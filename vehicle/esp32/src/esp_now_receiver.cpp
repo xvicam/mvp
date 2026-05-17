@@ -15,6 +15,8 @@ namespace esp_now_receiver {
         uint8_t mac[6] = {0};
         char data[config::max_packet_size] = {0};
         int len = 0;
+        bool has_rssi = false;
+        int8_t rssi_dbm = 0;
     };
 
     PendingPacket pending_packet;
@@ -34,6 +36,13 @@ namespace esp_now_receiver {
             memcpy(pending_packet.data, data, len);
             pending_packet.len = len;
             pending_packet.is_available = true;
+            if (info->rx_ctrl) {
+                pending_packet.has_rssi = true;
+                pending_packet.rssi_dbm = info->rx_ctrl->rssi;
+            } else {
+                pending_packet.has_rssi = false;
+                pending_packet.rssi_dbm = 0;
+            }
         }
 
         portEXIT_CRITICAL_ISR(&packet_mux);
@@ -76,9 +85,17 @@ namespace esp_now_receiver {
         Serial.print("RX from ");
         helpers::print_mac(local.mac);
         Serial.print(": ");
-        Serial.println(local.data);
+        Serial.print(local.data);
 
-        cyclist_store::parse_cyclist_packet(local.mac, local.data);
+        if (local.has_rssi) {
+            Serial.print(" | RSSI ");
+            Serial.print(local.rssi_dbm);
+            Serial.print(" dBm");
+        }
+
+        Serial.println();
+
+        cyclist_store::parse_cyclist_packet(local.mac, local.data, local.has_rssi, local.rssi_dbm);
     }
 
 }

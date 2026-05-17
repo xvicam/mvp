@@ -4,7 +4,7 @@
 
 #include "config.h"
 
-enum class Mode : uint8_t { Real, Manual };
+enum class Mode : uint8_t { Real, Signal, Manual };
 
 enum class State : uint8_t {
     Off,
@@ -23,6 +23,10 @@ struct CyclistData {
     double lat = 0.0;
     double lng = 0.0;
     float speed_kmph = 0.0;
+
+    bool has_rssi = false;
+    int8_t rssi_dbm = 0;
+    float rssi_smoothed_dbm = 0.0f;
 
     uint32_t last_seen_ms = 0;
 };

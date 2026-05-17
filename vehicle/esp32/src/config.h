@@ -28,6 +28,16 @@ namespace config {
     constexpr double warning_distance_m = 15;
     constexpr double urgent_distance_m = 8.0;
 
+    constexpr double rssi_ref_dbm = -59.0;
+    constexpr double rssi_path_loss = 2.2;
+
+    constexpr int8_t signal_rssi_urgent_dbm = -50;
+    constexpr int8_t signal_rssi_warning_dbm = -60;
+    constexpr int8_t signal_rssi_alert_dbm = -65;
+    constexpr int8_t signal_rssi_idle_dbm = -70;
+    constexpr float signal_rssi_hysteresis_db = 2.0f;
+    constexpr float rssi_smoothing_alpha = 0.3f;
+
     constexpr float max_reasonable_speed_kmph = 80.0;
 
     constexpr uint8_t max_cyclists = 12;

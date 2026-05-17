@@ -27,7 +27,7 @@ namespace serial_control {
             if (state_controller::get_current_mode() == Mode::Manual) {
                 state_controller::handle_manual_command(c);
             } else {
-                Serial.println("Ignored command. Press M to enter MANUAL mode.");
+                Serial.println("Ignored command. Press M to cycle into MANUAL mode.");
             }
         }
     }

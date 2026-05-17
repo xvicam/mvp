@@ -11,7 +11,12 @@ namespace cyclist_store {
 
     void remove_expired_cyclists();
 
-    bool parse_cyclist_packet(const uint8_t mac[6], const char* json);
+    bool parse_cyclist_packet(
+        const uint8_t mac[6],
+        const char* json,
+        bool has_rssi,
+        int8_t rssi_dbm
+    );
 
     CyclistsData get_cyclists_data();
 

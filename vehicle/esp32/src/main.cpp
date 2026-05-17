@@ -30,7 +30,7 @@ void setup() {
     }
 
     Serial.println("VICAM vehicle receiver started.");
-    Serial.println("Press M to switch REAL / MANUAL (demo) mode.");
+    Serial.println("Press M to switch REAL / SIGNAL / MANUAL (demo) mode.");
     Serial.println("Manual mode: 0=OFF/ON, 1=IDLE, 2=ALERT, 3=WARNING, 4=URGENT");
 }
 
@@ -46,6 +46,12 @@ void loop() {
 
         const CollisionResult collision_risk =
             risk_calculator::calculate_collision_risk(vehicle_data, cyclists_data);
+
+        state_controller::update_state(collision_risk.state);
+    } else if (state_controller::get_current_mode() == Mode::Signal) {
+        const CyclistsData cyclists_data = cyclist_store::get_cyclists_data();
+        const CollisionResult collision_risk =
+            risk_calculator::calculate_signal_risk(cyclists_data);
 
         state_controller::update_state(collision_risk.state);
     } else {
