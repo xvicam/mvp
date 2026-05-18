@@ -72,10 +72,22 @@ namespace statusLed {
         ledcWrite(kChB, applyPolarity(b));
 #endif
     }
-    static bool phaseOn(uint32_t nowMs, uint32_t periodMs, uint8_t dutyPct) {
-        if (periodMs == 0) return false;
+    // Returns a smooth 0–255 brightness using a cubic sine curve within the
+    // "on" window of each period. Applying a power of 3 (cubic) matches human
+    // visual perception of brightness much better, keeping the LED in the
+    // soft/medium brightness stages longer and avoiding harsh peaks.
+    static uint8_t phaseFade(uint32_t nowMs, uint32_t periodMs, uint8_t dutyPct) {
+        if (periodMs == 0) return 0;
         const uint32_t onMs = (static_cast<uint64_t>(periodMs) * dutyPct) / 100;
-        return (nowMs % periodMs) < onMs;
+        if (onMs == 0) return 0;
+        const uint32_t pos = nowMs % periodMs;
+        if (pos >= onMs) return 0;
+        // Sine curve: 0 → 1 → 0 over the on-window
+        const float t = static_cast<float>(pos) / static_cast<float>(onMs);
+        const float sinVal = sinf(t * 3.14159265f);
+        // Cubing the sine value provides a beautiful, premium breathing/fading curve
+        const float brightness = sinVal * sinVal * sinVal;
+        return static_cast<uint8_t>(brightness * 255.0f);
     }
 
 void init() {
@@ -100,35 +112,36 @@ void init() {
     }
 
     void update(uint32_t nowMs) {
-        // Requirements:
-        // - Bonding: flash BLUE
-        // - Operating: flash GREEN slowly
-        // - Crash: flash RED
-        // - Configuring: flash CYAN
+        // All modes now use smooth cubic sine-curve fading (gamma-corrected).
+        // - Bonding:     blue beautiful breath (1000ms period, 100% duty)
+        // - Operating:   green pulse           (2s period, gentle)
+        // - Crash:       red breathe           (500ms period, 50% duty)
+        // - Configuring: cyan breathe          (1s period, 50% duty)
+        // - Manual:      magenta pulse         (600ms period, 50% duty)
         switch (mode) {
             case Mode::Bonding: {
-                const bool on = phaseOn(nowMs, 250, 50); // 4Hz
-                writeRgb(0, 0, on ? 255 : 0);
+                const uint8_t b = phaseFade(nowMs, 1000, 100); // 1s continuous premium breath
+                writeRgb(0, 0, b);
                 break;
             }
             case Mode::Operating: {
-                const bool on = phaseOn(nowMs, 2000, 10); // brief pulse every 2s
-                writeRgb(0, on ? 255 : 0, 0);
+                const uint8_t b = phaseFade(nowMs, 2000, 20); // wider duty so the soft pulse is visible
+                writeRgb(0, b, 0);
                 break;
             }
             case Mode::Crash: {
-                const bool on = phaseOn(nowMs, 500, 50); // 1Hz
-                writeRgb(on ? 255 : 0, 0, 0);
+                const uint8_t b = phaseFade(nowMs, 500, 50);
+                writeRgb(b, 0, 0);
                 break;
             }
             case Mode::Configuring: {
-                const bool on = phaseOn(nowMs, 1000, 50); // 1Hz
-                writeRgb(0, on ? 255 : 0, on ? 255 : 0);
+                const uint8_t b = phaseFade(nowMs, 1000, 50);
+                writeRgb(0, b, b);
                 break;
             }
             case Mode::Manual: {
-                const bool on = phaseOn(nowMs, 600, 50); // ~1.7Hz magenta pulse
-                writeRgb(on ? 200 : 0, 0, on ? 255 : 0);
+                const uint8_t b = phaseFade(nowMs, 600, 50);
+                writeRgb(static_cast<uint8_t>((b * 200) / 255), 0, b);
                 break;
             }
         }
