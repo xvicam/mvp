@@ -154,7 +154,10 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
         if (_isScanning.value) return
         _discoveredDevices.value = emptyList()
         lastSeenMap.clear()
-        val filters = listOf(ScanFilter.Builder().setServiceUuid(ParcelUuid(SERVICE_UUID)).build())
+        val filters = listOf(
+            ScanFilter.Builder().setServiceUuid(ParcelUuid(SERVICE_UUID)).build(),
+            ScanFilter.Builder().setDeviceName("VICAM").build()
+        )
         val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
         scanner?.startScan(filters, settings, scanCallback)
         _isScanning.value = true
@@ -176,6 +179,38 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
         activeGatts[device.address] = gatt
     }
 
+    @SuppressLint("MissingPermission")
+    override fun sendCommand(deviceAddress: String, command: String) {
+        val gatt = activeGatts[deviceAddress]
+        if (gatt != null) {
+            try {
+                val char = gatt.getService(SERVICE_UUID)?.getCharacteristic(CHARACTERISTIC_UUID)
+                if (char != null) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        gatt.writeCharacteristic(char, command.toByteArray(), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        char.value = command.toByteArray()
+                        @Suppress("DEPRECATION")
+                        gatt.writeCharacteristic(char)
+                    }
+                    Log.d(TAG, "Sent command to $deviceAddress: $command")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to send command $command", e)
+            }
+        } else {
+            Log.w(TAG, "No active GATT connection for $deviceAddress")
+        }
+    }
+
+    override fun sendSensitivity(sensitivity: Float) {
+        // Find first active device to send sensitivity to
+        activeGatts.keys.firstOrNull()?.let { address ->
+            sendCommand(address, "SENSITIVITY:$sensitivity")
+        }
+    }
+
     private val gattCallback = object : BluetoothGattCallback() {
         @SuppressLint("MissingPermission")
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
@@ -184,6 +219,7 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
                 gatt.requestMtu(517)
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 Log.d(TAG, "GATT Disconnected")
+                activeGatts.remove(gatt.device.address)
             }
         }
 
@@ -329,10 +365,6 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
             Log.e(TAG, "Failed to send ACK", e)
         }
     }
-}
-
-object BluetoothScannerProvider {
-    lateinit var scanner: BluetoothScanner
 }
 
 actual fun getBluetoothScanner(): BluetoothScanner = BluetoothScannerProvider.scanner
