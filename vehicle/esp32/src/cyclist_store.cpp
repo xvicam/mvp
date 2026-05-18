@@ -10,46 +10,37 @@ namespace cyclist_store {
 
     int find_cyclist_by_mac(const uint8_t mac[6]) {
         for (uint8_t i = 0; i < config::max_cyclists; i++) {
-            if (cyclists[i].is_active && helpers::is_same_mac(cyclists[i].mac, mac)) {
+            if (cyclists[i].is_active && helpers::is_same_mac(cyclists[i].mac, mac))
                 return i;
-            }
         }
-
         return -1;
     }
 
     int find_free_cyclist_slot() {
         for (uint8_t i = 0; i < config::max_cyclists; i++) {
-            if (!cyclists[i].is_active) {
-                return i;
-            }
+            if (!cyclists[i].is_active) return i;
         }
-
         return -1;
     }
 
     int find_oldest_cyclist_slot() {
-        uint8_t oldest_index = 0;
-        uint32_t oldest_time = cyclists[0].last_seen_ms;
-
+        uint8_t  oldest_index = 0;
+        uint32_t oldest_time  = cyclists[0].last_seen_ms;
         for (uint8_t i = 1; i < config::max_cyclists; i++) {
             if (cyclists[i].last_seen_ms < oldest_time) {
-                oldest_time = cyclists[i].last_seen_ms;
+                oldest_time  = cyclists[i].last_seen_ms;
                 oldest_index = i;
             }
         }
-
         return oldest_index;
     }
 
     void remove_expired_cyclists() {
         uint32_t now = millis();
-
         for (uint8_t i = 0; i < config::max_cyclists; i++) {
-            if (
-                cyclists[i].is_active &&
-                now - cyclists[i].last_seen_ms > config::cyclist_timeout_ms
-            ) {
+            if (cyclists[i].is_active &&
+                now - cyclists[i].last_seen_ms > config::cyclist_timeout_ms)
+            {
                 cyclists[i].is_active = false;
             }
         }
@@ -62,9 +53,7 @@ namespace cyclist_store {
         int8_t rssi_dbm
     ) {
         StaticJsonDocument<256> doc;
-
         DeserializationError error = deserializeJson(doc, json);
-
         if (error) {
             Serial.print("Bad JSON: ");
             Serial.println(error.c_str());
@@ -76,40 +65,36 @@ namespace cyclist_store {
             return false;
         }
 
-        double lat = doc["lat"].as<double>();
-        double lng = doc["lng"].as<double>();
-        float speed_kmph = doc["speed"] | 0.0;
+        double lat        = doc["lat"].as<double>();
+        double lng        = doc["lng"].as<double>();
+        float  speed_kmph = doc["speed"] | 0.0f;
 
         if (!helpers::is_valid_coordinate(lat, lng)) {
             Serial.println("Rejected packet: invalid coordinates");
             return false;
         }
 
-        if (speed_kmph < 0.0 || speed_kmph > config::max_reasonable_speed_kmph) {
+        if (speed_kmph < 0.0f ||
+            speed_kmph > config::max_reasonable_cyclist_speed_kmph)
+        {
             Serial.println("Rejected packet: invalid speed");
             return false;
         }
 
         int index = find_cyclist_by_mac(mac);
+        if (index < 0) index = find_free_cyclist_slot();
+        if (index < 0) index = find_oldest_cyclist_slot();
 
-        if (index < 0) {
-            index = find_free_cyclist_slot();
-        }
+        bool  had_rssi           = cyclists[index].has_rssi;
+        float prev_smoothed_rssi = cyclists[index].rssi_smoothed_dbm;
 
-        if (index < 0) {
-            index = find_oldest_cyclist_slot();
-        }
-
-        bool had_rssi = cyclists[index].has_rssi;
-        float previous_smoothed_rssi = cyclists[index].rssi_smoothed_dbm;
-
-        cyclists[index].is_active = true;
+        cyclists[index].is_active  = true;
         memcpy(cyclists[index].mac, mac, 6);
-        cyclists[index].lat = lat;
-        cyclists[index].lng = lng;
+        cyclists[index].lat        = lat;
+        cyclists[index].lng        = lng;
         cyclists[index].speed_kmph = speed_kmph;
-        cyclists[index].has_rssi = has_rssi;
-        cyclists[index].rssi_dbm = rssi_dbm;
+        cyclists[index].has_rssi   = has_rssi;
+        cyclists[index].rssi_dbm   = rssi_dbm;
 
         if (has_rssi) {
             if (!had_rssi) {
@@ -118,40 +103,47 @@ namespace cyclist_store {
                 float alpha = config::rssi_smoothing_alpha;
                 cyclists[index].rssi_smoothed_dbm =
                     (alpha * static_cast<float>(rssi_dbm)) +
-                    ((1.0f - alpha) * previous_smoothed_rssi);
+                    ((1.0f - alpha) * prev_smoothed_rssi);
             }
         }
 
-        cyclists[index].last_seen_ms = millis();
+        // Remote mode: parse optional "state" field sent by cyclist firmware.
+        // 0 = safe, 1 = alert, 2 = warning, 3 = danger.
+        // Field absence is normal in Real/Demo modes — just clears the flag.
+        if (doc["state"].is<int>()) {
+            cyclists[index].has_cyclist_state = true;
+            switch (doc["state"].as<int>()) {
+                case 1: cyclists[index].cyclist_state = State::Alert;   break;
+                case 2: cyclists[index].cyclist_state = State::Warning; break;
+                case 3: cyclists[index].cyclist_state = State::Danger;  break;
+                default: cyclists[index].cyclist_state = State::Safe;   break;
+            }
+        } else {
+            cyclists[index].has_cyclist_state = false;
+            cyclists[index].cyclist_state     = State::Safe;
+        }
 
+        cyclists[index].last_seen_ms = millis();
         return true;
     }
 
     CyclistsData get_cyclists_data() {
         CyclistsData data;
-        data.cyclists = cyclists;
+        data.cyclists   = cyclists;
         data.slot_count = config::max_cyclists;
-
         return data;
     }
 
     uint8_t get_active_cyclist_count() {
         uint8_t count = 0;
-
         for (uint8_t i = 0; i < config::max_cyclists; i++) {
-            if (cyclists[i].is_active) {
-                count++;
-            }
+            if (cyclists[i].is_active) count++;
         }
-
         return count;
     }
 
     const CyclistData* get_cyclist_at(int index) {
-        if (index < 0 || index >= config::max_cyclists) {
-            return nullptr;
-        }
-
+        if (index < 0 || index >= config::max_cyclists) return nullptr;
         return &cyclists[index];
     }
 }

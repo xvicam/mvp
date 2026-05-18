@@ -14,8 +14,8 @@ namespace vehicle_reader {
         gps_serial.begin(
             config::gps_baud,
             SERIAL_8N1,
-            config::gps_rx_pin,
-            config::gps_tx_pin
+            config::gps_serial_rx_pin,
+            config::gps_serial_tx_pin
         );
     }
 
