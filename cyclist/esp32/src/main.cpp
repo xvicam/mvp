@@ -38,7 +38,8 @@ namespace statusLed {
         Operating,
         Bonding,
         Crash,
-        Configuring
+        Configuring,
+        Manual
     };
 
     static Mode mode = Mode::Operating;
@@ -125,6 +126,11 @@ void init() {
                 writeRgb(0, on ? 255 : 0, on ? 255 : 0);
                 break;
             }
+            case Mode::Manual: {
+                const bool on = phaseOn(nowMs, 600, 50); // ~1.7Hz magenta pulse
+                writeRgb(on ? 200 : 0, 0, on ? 255 : 0);
+                break;
+            }
         }
     }
 }
@@ -143,6 +149,10 @@ namespace sys {
     uint32_t crashModeStartTime = 0;
     bool crashNotificationAcknowledged = false;
 
+    bool isManual = false;
+    uint8_t manualAlertIndex = 0;
+    uint32_t manualLastBroadcastMs = 0;
+
     bool useStaticGps = false;
     bool useStaticImu = false;
     bool useStaticSpeed = false;
@@ -159,6 +169,7 @@ namespace sys {
     void enterBonding();
     void enterOperating();
     void enterConfiguring();
+    void enterManual();
     void enterCrashMode(const crash::CrashEvent& ev, const ImuOrientation& o);
 
 }
@@ -763,6 +774,7 @@ namespace sys {
         isBonding = false;
         isConfiguring = false;
         isCrashed = false;
+        isManual = false;
         crashNotificationAcknowledged = false;
         ble::stopAdvertising();
         espNow::initEspNow();
@@ -773,6 +785,7 @@ namespace sys {
 
     void enterCrashMode(const crash::CrashEvent& ev, const ImuOrientation& o) {
         isCrashed = true;
+        isManual = false;
         crashModeStartTime = millis();
         crashNotificationAcknowledged = false;
         lastCrash = ev;
@@ -781,6 +794,20 @@ namespace sys {
         ble::startAdvertising(false);
         statusLed::setMode(statusLed::Mode::Crash);
         Serial.println("CRASH DETECTED! Switched to BLE Mode.");
+    }
+
+    void enterManual() {
+        isBonding = false;
+        isConfiguring = false;
+        isCrashed = false;
+        isManual = true;
+        manualAlertIndex = 0;
+        manualLastBroadcastMs = 0;
+        crashNotificationAcknowledged = false;
+        ble::stopAdvertising();
+        espNow::initEspNow();
+        statusLed::setMode(statusLed::Mode::Manual);
+        Serial.println("Entered Manual Mode. Broadcasting static alerts via ESP-NOW.");
     }
 }
 
@@ -823,10 +850,37 @@ void loop() {
 
     gnss::update(now);
 
-    if (!sys::isBonding && espNow::isInitialised) {
+    if (!sys::isBonding && !sys::isManual && espNow::isInitialised) {
         if (now - espNow::lastSendMs >= espNow::kSendPeriodMs) {
             espNow::lastSendMs = now;
             espNow::sendEspNowBroadcast();
+        }
+    }
+
+    // --- Manual Mode: repeatedly broadcast the currently selected alert ---
+    if (sys::isManual && espNow::isInitialised) {
+        constexpr uint32_t kManualBroadcastIntervalMs = 2000; // repeat every 2s
+        if (now - sys::manualLastBroadcastMs >= kManualBroadcastIntervalMs) {
+            sys::manualLastBroadcastMs = now;
+
+            // Static JSON alert messages (indexed by manualAlertIndex)
+            // 0 = safe_distance  (1 press)
+            // 1 = alert_zone     (2 presses)
+            // 2 = approaching    (3 presses)
+            // 3 = about_to_crash (4 presses)
+            static const char* manualAlerts[] = {
+                "{\"type\":\"manual\",\"alert\":\"safe_distance\",\"message\":\"I am at safe distance\"}",
+                "{\"type\":\"manual\",\"alert\":\"alert_zone\",\"message\":\"I am in alert zone\"}",
+                "{\"type\":\"manual\",\"alert\":\"approaching\",\"message\":\"I am approaching\"}",
+                "{\"type\":\"manual\",\"alert\":\"about_to_crash\",\"message\":\"I am about to crash\"}"
+            };
+
+            const char* msg = manualAlerts[sys::manualAlertIndex];
+            esp_err_t result = esp_now_send(espNow::broadcastAddress,
+                                           reinterpret_cast<const uint8_t*>(msg),
+                                           strlen(msg) + 1);
+            Serial.printf("[Manual] Broadcasting: %s (%s)\n", msg, result == ESP_OK ? "OK" : "FAIL");
+            espNow::led::pulse(80);
         }
     }
 
@@ -855,6 +909,13 @@ void loop() {
                 Serial.println("Simulated crash triggered. Switched to BLE Mode.");
             } else {
                 Serial.println("Already in crash mode.");
+            }
+        } else if (c == 'M' || c == 'm') {
+            if (!sys::isManual) {
+                sys::enterManual();
+            } else {
+                Serial.println("Exiting Manual Mode, returning to Operating...");
+                sys::enterOperating();
             }
         }
     }
@@ -894,19 +955,41 @@ void loop() {
     }
 
     if (btnNow && !longPressHandled && btnDownAt != 0) {
-        const uint32_t holdMs = sys::isCrashed ? kButtonCrashLongPressMs : kButtonLongPressMs;
+        const uint32_t holdMs = sys::isManual ? kButtonLongPressMs
+                              : sys::isCrashed ? kButtonCrashLongPressMs
+                              : kButtonLongPressMs;
         if ((now - btnDownAt) >= holdMs) {
             longPressHandled = true;
             pressCount = 0;
-            Serial.println(sys::isCrashed
-                ? "Button held for 5 seconds in crash mode, entering deep sleep..."
-                : "Button held for 2 seconds, entering deep sleep...");
-            powerMgr::enterDeepSleep("button long press", powerMgr::SleepReason::Button);
+            if (sys::isManual) {
+                Serial.println("Button held in manual mode, returning to operating...");
+                sys::enterOperating();
+            } else {
+                Serial.println(sys::isCrashed
+                    ? "Button held for 5 seconds in crash mode, entering deep sleep..."
+                    : "Button held for 2 seconds, entering deep sleep...");
+                powerMgr::enterDeepSleep("button long press", powerMgr::SleepReason::Button);
+            }
         }
     }
 
     if (pressCount > 0 && (now - lastReleaseAt) > kButtonDoublePressGapMs) {
-        if (pressCount >= 3) {
+        if (sys::isManual) {
+            // In Manual Mode: button presses select the alert level
+            // 1 = safe_distance, 2 = alert_zone, 3 = approaching, 4 = about_to_crash
+            static const char* alertNames[] = {"safe_distance", "alert_zone", "approaching", "about_to_crash"};
+            uint8_t idx = (pressCount >= 4) ? 3 : static_cast<uint8_t>(pressCount - 1);
+            sys::manualAlertIndex = idx;
+            sys::manualLastBroadcastMs = 0; // trigger immediate broadcast
+            Serial.printf("[Manual] Alert set to: %s (%d press%s)\n", alertNames[idx], pressCount, pressCount > 1 ? "es" : "");
+        } else if (pressCount >= 4) {
+            if (sys::isCrashed) {
+                Serial.println("Button quad-press in crash mode, ignoring...");
+            } else {
+                Serial.println("Button quad-pressed, entering manual mode...");
+                sys::enterManual();
+            }
+        } else if (pressCount == 3) {
             if (sys::isCrashed) {
                 Serial.println("Button triple-press in crash mode, ignoring...");
             } else {
