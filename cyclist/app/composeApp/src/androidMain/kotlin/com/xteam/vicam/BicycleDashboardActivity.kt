@@ -35,6 +35,10 @@ class BicycleDashboardActivity : ComponentActivity() {
                                 AppPreferences.save(this@BicycleDashboardActivity)
                                 DeviceManager.selectedDevice = null
                                 finish()
+                            },
+                            onGoBack = {
+                                DeviceManager.selectedDevice = null
+                                finish()
                             }
                         )
                         CrashDialog()

@@ -37,7 +37,8 @@ namespace statusLed {
     enum class Mode : uint8_t {
         Operating,
         Bonding,
-        Crash
+        Crash,
+        Configuring
     };
 
     static Mode mode = Mode::Operating;
@@ -102,6 +103,7 @@ void init() {
         // - Bonding: flash BLUE
         // - Operating: flash GREEN slowly
         // - Crash: flash RED
+        // - Configuring: flash CYAN
         switch (mode) {
             case Mode::Bonding: {
                 const bool on = phaseOn(nowMs, 250, 50); // 4Hz
@@ -118,6 +120,11 @@ void init() {
                 writeRgb(on ? 255 : 0, 0, 0);
                 break;
             }
+            case Mode::Configuring: {
+                const bool on = phaseOn(nowMs, 1000, 50); // 1Hz
+                writeRgb(0, on ? 255 : 0, on ? 255 : 0);
+                break;
+            }
         }
     }
 }
@@ -127,14 +134,31 @@ namespace sys {
     bool bondingCompleteFlag = false;
     uint32_t bondingStartTime = 0;
 
+    bool isConfiguring = false;
+    uint32_t configuringStartTime = 0;
+
     bool isCrashed = false;
     crash::CrashEvent lastCrash;
     ImuOrientation lastCrashOrientation;
     uint32_t crashModeStartTime = 0;
     bool crashNotificationAcknowledged = false;
 
+    bool useStaticGps = false;
+    bool useStaticImu = false;
+    bool useStaticSpeed = false;
+    bool useStaticHeading = false;
+    float staticLat = 52.4862f, staticLng = -1.8904f, staticAlt = 150.0f;
+    float staticAx = 0.0f, staticAy = 0.0f, staticAz = 9.81f;
+    float staticGx = 0.0f, staticGy = 0.0f, staticGz = 0.0f;
+    float staticSpeed = 10.0f, staticHeading = 90.0f;
+
+    bool anyStaticEnabled() {
+        return useStaticGps || useStaticImu || useStaticSpeed || useStaticHeading;
+    }
+
     void enterBonding();
     void enterOperating();
+    void enterConfiguring();
     void enterCrashMode(const crash::CrashEvent& ev, const ImuOrientation& o);
 
 }
@@ -209,40 +233,66 @@ namespace espNow {
 
     void sendEspNowBroadcast() {
         if (!isInitialised) return;
-        // Updated broadcast with GPS, IMU data and heading
+
+        // --- GPS ---
         const gnss::Fix currentFix = gnss::lastFix();
-        const bool gpsValid = gnss::hasFix(30000);
-        float ax = lastImuSample.ax;
-        float ay = lastImuSample.ay;
-        float az = lastImuSample.az;
-        float gx = lastImuSample.gx;
-        float gy = lastImuSample.gy;
-        float gz = lastImuSample.gz;
-        float accelMag = sqrt(ax*ax + ay*ay + az*az);
-        float speed = 0.0f; // Placeholder for speed calculation
-        // Compute heading from previous fix if available
-        float headingDeg = 0.0f;
-        if (gpsValid && espNow::previousFix.valid) {
-            const double kPi = 3.14159265358979323846;
-            double lat1 = espNow::previousFix.latDeg * kPi / 180.0;
-            double lon1 = espNow::previousFix.lngDeg * kPi / 180.0;
-            double lat2 = currentFix.latDeg * kPi / 180.0;
-            double lon2 = currentFix.lngDeg * kPi / 180.0;
-            double dLon = lon2 - lon1;
-            double y = sin(dLon) * cos(lat2);
-            double x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon);
-            double bearing = atan2(y, x);
-            bearing = fmod((bearing * 180.0 / kPi) + 360.0, 360.0);
-            headingDeg = static_cast<float>(bearing);
+        const bool realGpsValid = gnss::hasFix(30000);
+        bool gpsValid;
+        double lat, lng, alt;
+        if (sys::useStaticGps) {
+            gpsValid = true;
+            lat = sys::staticLat;
+            lng = sys::staticLng;
+            alt = sys::staticAlt;
+        } else {
+            gpsValid = realGpsValid;
+            lat = currentFix.latDeg;
+            lng = currentFix.lngDeg;
+            alt = currentFix.altMeters;
         }
-        // Update previous fix for next calculation
-        espNow::previousFix = currentFix;
+
+        // --- IMU ---
+        float ax, ay, az, gx, gy, gz;
+        if (sys::useStaticImu) {
+            ax = sys::staticAx; ay = sys::staticAy; az = sys::staticAz;
+            gx = sys::staticGx; gy = sys::staticGy; gz = sys::staticGz;
+        } else {
+            ax = lastImuSample.ax; ay = lastImuSample.ay; az = lastImuSample.az;
+            gx = lastImuSample.gx; gy = lastImuSample.gy; gz = lastImuSample.gz;
+        }
+        float accelMag = sqrt(ax*ax + ay*ay + az*az);
+
+        // --- Speed ---
+        float speed = sys::useStaticSpeed ? sys::staticSpeed : 0.0f;
+
+        // --- Heading ---
+        float headingDeg;
+        if (sys::useStaticHeading) {
+            headingDeg = sys::staticHeading;
+        } else {
+            headingDeg = 0.0f;
+            if (realGpsValid && espNow::previousFix.valid) {
+                const double kPi = 3.14159265358979323846;
+                double lat1 = espNow::previousFix.latDeg * kPi / 180.0;
+                double lon1 = espNow::previousFix.lngDeg * kPi / 180.0;
+                double lat2 = currentFix.latDeg * kPi / 180.0;
+                double lon2 = currentFix.lngDeg * kPi / 180.0;
+                double dLon = lon2 - lon1;
+                double y = sin(dLon) * cos(lat2);
+                double x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon);
+                double bearing = atan2(y, x);
+                bearing = fmod((bearing * 180.0 / kPi) + 360.0, 360.0);
+                headingDeg = static_cast<float>(bearing);
+            }
+        }
+        if (!sys::useStaticGps) espNow::previousFix = currentFix;
+
         char message[256];
         snprintf(message, sizeof(message),
                 "{\"lat\":%.7f,\"lng\":%.7f,\"alt\":%.2f,\"ax\":%.2f,\"ay\":%.2f,\"az\":%.2f,\"gx\":%.2f,\"gy\":%.2f,\"gz\":%.2f,\"speed\":%.2f,\"accel\":%.2f,\"heading\":%.2f}",
-                gpsValid ? currentFix.latDeg : 0.0,
-                gpsValid ? currentFix.lngDeg : 0.0,
-                gpsValid ? currentFix.altMeters : 0.0,
+                gpsValid ? lat : 0.0,
+                gpsValid ? lng : 0.0,
+                gpsValid ? alt : 0.0,
                 ax, ay, az, gx, gy, gz, speed, accelMag, headingDeg);
         esp_now_send(broadcastAddress, reinterpret_cast<const uint8_t *>(message), strlen(message) + 1);
     }
@@ -555,6 +605,45 @@ namespace ble {
             if (val.find("ACK") != std::string::npos) {
                 sys::crashNotificationAcknowledged = true;
                 Serial.println("Crash notification acknowledged by APP!");
+            } else if (sys::isConfiguring) {
+                // Per-group toggles
+                if (val.find("STATIC_GPS:1") != std::string::npos) {
+                    sys::useStaticGps = true;
+                    Serial.println("Static GPS ENABLED");
+                } else if (val.find("STATIC_GPS:0") != std::string::npos) {
+                    sys::useStaticGps = false;
+                    Serial.println("Static GPS DISABLED");
+                } else if (val.find("STATIC_IMU:1") != std::string::npos) {
+                    sys::useStaticImu = true;
+                    Serial.println("Static IMU ENABLED");
+                } else if (val.find("STATIC_IMU:0") != std::string::npos) {
+                    sys::useStaticImu = false;
+                    Serial.println("Static IMU DISABLED");
+                } else if (val.find("STATIC_SPEED:1") != std::string::npos) {
+                    sys::useStaticSpeed = true;
+                    Serial.println("Static Speed ENABLED");
+                } else if (val.find("STATIC_SPEED:0") != std::string::npos) {
+                    sys::useStaticSpeed = false;
+                    Serial.println("Static Speed DISABLED");
+                } else if (val.find("STATIC_HEADING:1") != std::string::npos) {
+                    sys::useStaticHeading = true;
+                    Serial.println("Static Heading ENABLED");
+                } else if (val.find("STATIC_HEADING:0") != std::string::npos) {
+                    sys::useStaticHeading = false;
+                    Serial.println("Static Heading DISABLED");
+                } else if (val.find("STATIC_VALS:") == 0) {
+                    int parsed = sscanf(val.c_str(), "STATIC_VALS:%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f",
+                                        &sys::staticLat, &sys::staticLng, &sys::staticAlt,
+                                        &sys::staticAx, &sys::staticAy, &sys::staticAz,
+                                        &sys::staticGx, &sys::staticGy, &sys::staticGz,
+                                        &sys::staticSpeed, &sys::staticHeading);
+                    Serial.printf("Parsed %d static values\n", parsed);
+                } else if (val.find("MODE:OPERATING") != std::string::npos) {
+                    Serial.println("App requested switch to OPERATING mode.");
+                    sys::enterOperating();
+                }
+            } else {
+                Serial.println("Config command received but not in Configuring Mode. Ignoring.");
             }
         }
     };
@@ -579,13 +668,20 @@ namespace ble {
         chr->setValue(v);
 
         started = true;
+
+        // Start the service once here so it's available when we advertise.
+        service->start();
     }
 
     void startAdvertising(bool isBonding) {
         auto *adv = NimBLEDevice::getAdvertising();
+        adv->stop();
+        adv->reset();
+
+        // Service UUID goes in the main advertising packet so Android scan filters pick it up.
         adv->addServiceUUID(SVC);
 
-        // Force the BLE name
+        // Device name goes in the scan response to avoid overflowing the 31-byte ad packet.
         adv->enableScanResponse(true);
         adv->setName("VICAM");
 
@@ -594,6 +690,7 @@ namespace ble {
         adv->setDiscoverableMode(isBonding ? 0x02 : 0);
 
         adv->start();
+        Serial.printf("BLE advertising started (bonding=%d, discoverable=%d)\n", isBonding ? 1 : 0, isBonding ? 1 : 0);
     }
 
     void stopAdvertising() {
@@ -644,6 +741,7 @@ namespace ble {
 namespace sys {
     void enterBonding() {
         isBonding = true;
+        isConfiguring = false;
         bondingStartTime = millis();
         espNow::stopEspNow();
         ble::startAdvertising(true);
@@ -651,8 +749,19 @@ namespace sys {
         Serial.println("Entered Bonding Mode.");
     }
 
+    void enterConfiguring() {
+        isConfiguring = true;
+        isBonding = false;
+        configuringStartTime = millis();
+        espNow::stopEspNow();
+        ble::startAdvertising(false); // Non-discoverable
+        statusLed::setMode(statusLed::Mode::Configuring);
+        Serial.println("Entered Configuring Mode. BLE enabled (non-discoverable).");
+    }
+
     void enterOperating() {
         isBonding = false;
+        isConfiguring = false;
         isCrashed = false;
         crashNotificationAcknowledged = false;
         ble::stopAdvertising();
@@ -796,21 +905,26 @@ void loop() {
         }
     }
 
-    if (pressCount == 1 && (now - lastReleaseAt) > kButtonDoublePressGapMs) {
-        pressCount = 0;
-    }
-
-    if (pressCount >= 2) {
-        pressCount = 0;
-        if (sys::isCrashed) {
-            Serial.println("Button double-press in crash mode, ignoring bonding request...");
-        } else if (!sys::isBonding) {
-            Serial.println("Button double-pressed, entering bonding mode...");
-            sys::enterBonding();
-        } else {
-            Serial.println("Button double-pressed, exiting bonding mode...");
-            sys::enterOperating();
+    if (pressCount > 0 && (now - lastReleaseAt) > kButtonDoublePressGapMs) {
+        if (pressCount >= 3) {
+            if (sys::isCrashed) {
+                Serial.println("Button triple-press in crash mode, ignoring...");
+            } else {
+                Serial.println("Button triple-pressed, entering configuring mode...");
+                sys::enterConfiguring();
+            }
+        } else if (pressCount == 2) {
+            if (sys::isCrashed) {
+                Serial.println("Button double-press in crash mode, ignoring bonding request...");
+            } else if (!sys::isBonding) {
+                Serial.println("Button double-pressed, entering bonding mode...");
+                sys::enterBonding();
+            } else {
+                Serial.println("Button double-pressed, exiting bonding mode...");
+                sys::enterOperating();
+            }
         }
+        pressCount = 0;
     }
 
     btnPrev = btnNow;
@@ -822,6 +936,11 @@ void loop() {
 
     if (sys::isBonding && (now - sys::bondingStartTime > 120000)) {
         Serial.println("Bonding timeout, entering operating mode...");
+        sys::enterOperating();
+    }
+
+    if (sys::isConfiguring && (now - sys::configuringStartTime > 120000)) {
+        Serial.println("Configuring timeout, entering operating mode...");
         sys::enterOperating();
     }
 
@@ -839,23 +958,87 @@ void loop() {
                 sys::enterCrashMode(ev, o);
             }
 
-            const gnss::Fix fix = gnss::lastFix();
-            if (gnss::hasFix(30000)) {
-                Serial.printf("GPS - Lat: %.7f, Lng: %.7f, Alt: %.2f | ", fix.latDeg, fix.lngDeg, fix.altMeters);
+            // --- Battery: calibrated multi-sample average ---
+            // analogReadMilliVolts() uses the factory Vref calibration
+            // stored in this chip's eFuse for accurate readings.
+            constexpr int kBatSamples = 32;
+            uint32_t mvSum = 0;
+            for (int i = 0; i < kBatSamples; i++) {
+                mvSum += analogReadMilliVolts(batteryPin);
+            }
+            float mvAvg = static_cast<float>(mvSum) / kBatSamples;
+            float voltage = (mvAvg / 1000.0f) * 2.0f;  // ×2 for onboard voltage divider
+
+            // LiPo discharge curve lookup table (voltage -> percentage)
+            // Based on a typical single-cell LiPo discharge profile.
+            static const float lutV[] = {
+                4.20f, 4.15f, 4.10f, 4.05f, 4.00f,
+                3.95f, 3.90f, 3.85f, 3.80f, 3.75f,
+                3.70f, 3.65f, 3.60f, 3.55f, 3.50f,
+                3.45f, 3.40f, 3.35f, 3.30f, 3.20f,
+                3.00f
+            };
+            static const float lutP[] = {
+                100.0f, 97.0f, 93.0f, 88.0f, 83.0f,
+                 78.0f, 72.0f, 62.0f, 52.0f, 42.0f,
+                 33.0f, 24.0f, 17.0f, 12.0f,  8.0f,
+                  5.0f,  3.0f,  1.5f,  1.0f,  0.0f,
+                  0.0f
+            };
+            constexpr int lutLen = sizeof(lutV) / sizeof(lutV[0]);
+
+            float percentage;
+            if (voltage >= lutV[0]) {
+                percentage = 100.0f;
+            } else if (voltage <= lutV[lutLen - 1]) {
+                percentage = 0.0f;
             } else {
-                Serial.print("GPS - Waiting for fix... | ");
+                // Linear interpolation between LUT points
+                for (int i = 0; i < lutLen - 1; i++) {
+                    if (voltage >= lutV[i + 1]) {
+                        float t = (voltage - lutV[i + 1]) / (lutV[i] - lutV[i + 1]);
+                        percentage = lutP[i + 1] + t * (lutP[i] - lutP[i + 1]);
+                        break;
+                    }
+                }
             }
 
-            int rawValue = analogRead(batteryPin);
-            float voltage = (rawValue / 4095.0) * 3.3 * 2.0;
-            float percentage = (voltage - 3.3) / (4.2 - 3.3) * 100;
+            // Exponential smoothing so the display doesn't jump around
+            static float smoothPct = -1.0f;
+            if (smoothPct < 0.0f) {
+                smoothPct = percentage; // first reading: seed directly
+            } else {
+                smoothPct = smoothPct * 0.9f + percentage * 0.1f;
+            }
+            percentage = smoothPct;
 
-            if (percentage > 100) percentage = 100;
-            if (percentage < 0) percentage = 0;
+            // --- GPS serial ---
+            if (sys::useStaticGps) {
+                Serial.printf("[S]GPS - Lat: %.7f, Lng: %.7f, Alt: %.2f | ",
+                              sys::staticLat, sys::staticLng, sys::staticAlt);
+            } else {
+                const gnss::Fix fix = gnss::lastFix();
+                if (gnss::hasFix(30000)) {
+                    Serial.printf("GPS - Lat: %.7f, Lng: %.7f, Alt: %.2f | ", fix.latDeg, fix.lngDeg, fix.altMeters);
+                } else {
+                    Serial.print("GPS - Waiting for fix... | ");
+                }
+            }
 
-            Serial.printf("Voltage: %.2fV | Percentage: %.1f%% ", voltage, percentage);
+            // --- IMU serial ---
+            if (sys::useStaticImu) {
+                Serial.printf("[S]Accel: %.2f,%.2f,%.2f | [S]Gyro: %.2f,%.2f,%.2f | ",
+                              sys::staticAx, sys::staticAy, sys::staticAz,
+                              sys::staticGx, sys::staticGy, sys::staticGz);
+            } else {
+                imuPrint::printImuLine(s, o);
+            }
 
-            imuPrint::printImuLine(s, o);
+            // --- Speed & Heading serial ---
+            if (sys::useStaticSpeed) Serial.printf("[S]Speed: %.2f | ", sys::staticSpeed);
+            if (sys::useStaticHeading) Serial.printf("[S]Heading: %.2f | ", sys::staticHeading);
+
+            Serial.printf("Voltage: %.2fV | Pct: %.1f%%\n", voltage, percentage);
 
             powerMgr::update(now, o.isMoving);
         }
@@ -874,5 +1057,5 @@ void loop() {
         }
     }
 
-    if (sys::isBonding) ble::tick(now);
+    if (sys::isBonding || sys::isConfiguring) ble::tick(now);
 }
