@@ -199,9 +199,88 @@ namespace espNow {
     // Store the most recent IMU sample for broadcast
     ImuSample lastImuSample{};
     gnss::Fix previousFix{};
+    gnss::Fix headingRefFix{};
+    uint32_t previousFixAtMs = 0;
+    float lastGnssSpeedMps = 0.0f;
+    uint32_t lastGnssSpeedAtMs = 0;
+    float lastImuSpeedMps = 0.0f;
+    float lastHeadingDeg = 0.0f;
+    uint32_t lastImuUpdateMs = 0;
+    float lastImuAccelMps2 = 0.0f;
+    bool lastImuMoving = false;
     constexpr uint32_t kSendPeriodMs = 250;
     uint32_t messageCounter = 0;
     bool isInitialised = false;
+    static double haversineMeters(double lat1Deg, double lon1Deg, double lat2Deg, double lon2Deg) {
+        constexpr double kPi = 3.14159265358979323846;
+        constexpr double kEarthRadiusM = 6371000.0;
+        const double lat1 = lat1Deg * kPi / 180.0;
+        const double lon1 = lon1Deg * kPi / 180.0;
+        const double lat2 = lat2Deg * kPi / 180.0;
+        const double lon2 = lon2Deg * kPi / 180.0;
+        const double dLat = lat2 - lat1;
+        const double dLon = lon2 - lon1;
+        const double a = std::sin(dLat * 0.5) * std::sin(dLat * 0.5) +
+                         std::cos(lat1) * std::cos(lat2) * std::sin(dLon * 0.5) * std::sin(dLon * 0.5);
+        const double c = 2.0 * std::atan2(std::sqrt(a), std::sqrt(1.0 - a));
+        return kEarthRadiusM * c;
+    }
+
+    static bool computeGnssSpeedMps(const gnss::Fix &currentFix, float &outSpeedMps, uint32_t &outAgeMs) {
+        if (!currentFix.valid || !previousFix.valid) return false;
+        if (currentFix.updatedAtMs == 0 || previousFix.updatedAtMs == 0) return false;
+        if (currentFix.updatedAtMs <= previousFix.updatedAtMs) return false;
+
+        const uint32_t dtMs = currentFix.updatedAtMs - previousFix.updatedAtMs;
+        outAgeMs = millis() - currentFix.updatedAtMs;
+        if (dtMs < 200 || dtMs > 5000) return false;
+
+        const double distM = haversineMeters(previousFix.latDeg, previousFix.lngDeg, currentFix.latDeg, currentFix.lngDeg);
+        const float speedMps = static_cast<float>(distM / (static_cast<double>(dtMs) / 1000.0));
+
+        if (speedMps < 0.0f) return false;
+        const float kMaxSpeedMps = 60.0f; // sanity cap
+        outSpeedMps = (speedMps > kMaxSpeedMps) ? kMaxSpeedMps : speedMps;
+        return true;
+    }
+
+    void updateImuSpeed(uint32_t nowMs, const ImuOrientation &o) {
+        constexpr float kNoiseFloorMps2 = 0.15f;
+        constexpr float kLeakPerSecMoving = 0.45f;
+        constexpr float kLeakPerSecStill = 1.6f;
+        constexpr float kMaxSpeedMps = 40.0f;
+
+        if (lastImuUpdateMs == 0) {
+            lastImuUpdateMs = nowMs;
+            lastImuSpeedMps = 0.0f;
+            lastImuAccelMps2 = o.accelMagHp;
+            lastImuMoving = o.isMoving;
+            return;
+        }
+
+        const uint32_t dtMs = nowMs - lastImuUpdateMs;
+        if (dtMs == 0 || dtMs > 1000) {
+            lastImuUpdateMs = nowMs;
+            lastImuAccelMps2 = o.accelMagHp;
+            lastImuMoving = o.isMoving;
+            return;
+        }
+
+        const float dt = static_cast<float>(dtMs) / 1000.0f;
+        const float leak = o.isMoving ? kLeakPerSecMoving : kLeakPerSecStill;
+        lastImuSpeedMps *= std::exp(-leak * dt);
+
+        float accel = std::fabs(o.accelMagHp);
+        if (accel < kNoiseFloorMps2) accel = 0.0f;
+        lastImuSpeedMps += accel * dt;
+
+        if (lastImuSpeedMps < 0.0f) lastImuSpeedMps = 0.0f;
+        if (lastImuSpeedMps > kMaxSpeedMps) lastImuSpeedMps = kMaxSpeedMps;
+
+        lastImuUpdateMs = nowMs;
+        lastImuAccelMps2 = o.accelMagHp;
+        lastImuMoving = o.isMoving;
+    }
 
     namespace led {
         uint32_t offAtMs = 0;
@@ -258,9 +337,9 @@ namespace espNow {
     void sendEspNowBroadcast() {
         if (!isInitialised) return;
 
-        // --- GPS ---
         const gnss::Fix currentFix = gnss::lastFix();
-        const bool realGpsValid = gnss::hasFix(30000);
+        const bool realGpsValid = gnss::hasFix(3000);
+
         bool gpsValid;
         double lat, lng, alt;
         if (sys::useStaticGps) {
@@ -275,7 +354,59 @@ namespace espNow {
             alt = currentFix.altMeters;
         }
 
-        // --- IMU ---
+        if (!sys::useStaticGps && gpsValid && currentFix.valid && currentFix.updatedAtMs > previousFix.updatedAtMs) {
+
+            const uint32_t dtMs = currentFix.updatedAtMs - previousFix.updatedAtMs;
+            const bool coordsChanged = (currentFix.latDeg != previousFix.latDeg || currentFix.lngDeg != previousFix.lngDeg);
+
+            // Process if coordinates changed OR if enough time has passed to conclude we are stationary.
+            if (coordsChanged || dtMs >= 800) {
+                // Calculate Speed
+                float gnssSpeedMps = 0.0f;
+                uint32_t gnssSpeedAgeMs = 0;
+                if (computeGnssSpeedMps(currentFix, gnssSpeedMps, gnssSpeedAgeMs)) {
+                    lastGnssSpeedMps = gnssSpeedMps;
+                    lastGnssSpeedAtMs = millis();
+                }
+
+                // Calculate Heading
+                // We calculate bearing only over a distance of > 2.5 meters to completely eliminate GPS dither/noise.
+                if (!headingRefFix.valid) {
+                    headingRefFix = currentFix;
+                } else if (coordsChanged) {
+                    double distM = haversineMeters(headingRefFix.latDeg, headingRefFix.lngDeg, currentFix.latDeg, currentFix.lngDeg);
+                    if (distM > 2.5) { 
+                        const double kPi = 3.14159265358979323846;
+                        double lat1 = headingRefFix.latDeg * kPi / 180.0;
+                        double lon1 = headingRefFix.lngDeg * kPi / 180.0;
+                        double lat2 = currentFix.latDeg * kPi / 180.0;
+                        double lon2 = currentFix.lngDeg * kPi / 180.0;
+                        double dLon = lon2 - lon1;
+                        double y = std::sin(dLon) * std::cos(lat2);
+                        double x = std::cos(lat1) * std::sin(lat2) - std::sin(lat1) * std::cos(lat2) * std::cos(dLon);
+                        double bearing = std::atan2(y, x);
+                        bearing = std::fmod((bearing * 180.0 / kPi) + 360.0, 360.0);
+                        lastHeadingDeg = static_cast<float>(bearing);
+                        
+                        headingRefFix = currentFix; // Update our baseline point
+                    }
+                }
+
+                // Save the fix ONLY when a new one is processed
+                previousFix = currentFix;
+                previousFixAtMs = millis();
+            }
+        }
+
+        float speed = 0.0f;
+        if (sys::useStaticSpeed) {
+            speed = sys::staticSpeed;
+        } else if (!sys::useStaticGps && gpsValid && (millis() - lastGnssSpeedAtMs < 3000)) {
+            speed = lastGnssSpeedMps;
+        } else {
+            speed = lastImuSpeedMps;
+        }
+
         float ax, ay, az, gx, gy, gz;
         if (sys::useStaticImu) {
             ax = sys::staticAx; ay = sys::staticAy; az = sys::staticAz;
@@ -284,32 +415,9 @@ namespace espNow {
             ax = lastImuSample.ax; ay = lastImuSample.ay; az = lastImuSample.az;
             gx = lastImuSample.gx; gy = lastImuSample.gy; gz = lastImuSample.gz;
         }
-        float accelMag = sqrt(ax*ax + ay*ay + az*az);
+        float accelMag = std::sqrt(ax*ax + ay*ay + az*az);
 
-        // --- Speed ---
-        float speed = sys::useStaticSpeed ? sys::staticSpeed : 0.0f;
-
-        // --- Heading ---
-        float headingDeg;
-        if (sys::useStaticHeading) {
-            headingDeg = sys::staticHeading;
-        } else {
-            headingDeg = 0.0f;
-            if (realGpsValid && espNow::previousFix.valid) {
-                const double kPi = 3.14159265358979323846;
-                double lat1 = espNow::previousFix.latDeg * kPi / 180.0;
-                double lon1 = espNow::previousFix.lngDeg * kPi / 180.0;
-                double lat2 = currentFix.latDeg * kPi / 180.0;
-                double lon2 = currentFix.lngDeg * kPi / 180.0;
-                double dLon = lon2 - lon1;
-                double y = sin(dLon) * cos(lat2);
-                double x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon);
-                double bearing = atan2(y, x);
-                bearing = fmod((bearing * 180.0 / kPi) + 360.0, 360.0);
-                headingDeg = static_cast<float>(bearing);
-            }
-        }
-        if (!sys::useStaticGps) espNow::previousFix = currentFix;
+        const float headingDeg = sys::useStaticHeading ? sys::staticHeading : lastHeadingDeg;
 
         char message[256];
         snprintf(message, sizeof(message),
@@ -320,7 +428,6 @@ namespace espNow {
                 ax, ay, az, gx, gy, gz, speed, accelMag, headingDeg);
         esp_now_send(broadcastAddress, reinterpret_cast<const uint8_t *>(message), strlen(message) + 1);
     }
-
 
     void sendCrashAlert(uint32_t crashId, float peakDynamicMps2, const ImuOrientation &o) {
         if (!isInitialised) return;
@@ -731,13 +838,12 @@ namespace ble {
 
     void sendCrash(uint32_t crashId, float peakDynamicMps2, const ImuOrientation &o) {
         if (!srv || srv->getConnectedCount() == 0) {
-            // Serial.println("Skipping sendCrash: no clients connected"); // Optional: uncomment if needed
             return;
         }
         char message[256];
 
         const gnss::Fix fix = gnss::lastFix();
-        const bool gpsValid = gnss::hasFix(30000);
+        const bool gpsValid = gnss::hasFix(3000);
         const uint32_t gpsAgeMs = fix.updatedAtMs == 0 ? 0 : (millis() - fix.updatedAtMs);
 
         // Keep JSON backwards compatible by always including gps.lat/lng, but add gps.valid/age/sats.
@@ -1047,6 +1153,7 @@ void loop() {
         if (imuPrint::imu.readSample(s)) {
             espNow::lastImuSample = s;
             const ImuOrientation o = imuPrint::imu.computeOrientation(s);
+            espNow::updateImuSpeed(now, o);
             static crash::CrashDetector detector;
             const crash::CrashEvent ev = detector.update(now, s, o);
 
@@ -1114,7 +1221,7 @@ void loop() {
                               sys::staticLat, sys::staticLng, sys::staticAlt);
             } else {
                 const gnss::Fix fix = gnss::lastFix();
-                if (gnss::hasFix(30000)) {
+                if (gnss::hasFix(3000)) {
                     Serial.printf("GPS - Lat: %.7f, Lng: %.7f, Alt: %.2f | ", fix.latDeg, fix.lngDeg, fix.altMeters);
                 } else {
                     Serial.print("GPS - Waiting for fix... | ");
@@ -1131,8 +1238,17 @@ void loop() {
             }
 
             // --- Speed & Heading serial ---
-            if (sys::useStaticSpeed) Serial.printf("[S]Speed: %.2f | ", sys::staticSpeed);
-            if (sys::useStaticHeading) Serial.printf("[S]Heading: %.2f | ", sys::staticHeading);
+            if (sys::useStaticSpeed) {
+                Serial.printf("[S]Speed: %.2f | ", sys::staticSpeed);
+            } else {
+                const bool gpsValidForSpeed = gnss::hasFix(3000) && (millis() - espNow::lastGnssSpeedAtMs < 3000);
+                Serial.printf("Speed: %.2f | ", gpsValidForSpeed ? espNow::lastGnssSpeedMps : espNow::lastImuSpeedMps);
+            }
+            if (sys::useStaticHeading) {
+                Serial.printf("[S]Heading: %.2f | ", sys::staticHeading);
+            } else {
+                Serial.printf("Heading: %.2f | ", espNow::lastHeadingDeg);
+            }
 
             Serial.printf("Voltage: %.2fV | Pct: %.1f%%\n", voltage, percentage);
 

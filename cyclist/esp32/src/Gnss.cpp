@@ -13,7 +13,7 @@ namespace {
   DFRobot_GNSS_I2C g_gnss(&Wire, kGnssAddr);
   bool g_inited = false;
   uint32_t g_lastPollMs = 0;
-  gnss::Fix g_last{false, 0.0, 0.0, 0, 0};
+  gnss::Fix g_last{false, 0.0, 0.0, 0.0, 0.0f, 0, 0};
 
   static bool isValidCoord(double lat, double lng) {
     // filters out 0,0 before a fix.
@@ -56,11 +56,8 @@ namespace gnss {
     double latDeg = lat.latitudeDegree;
     double lngDeg = lon.lonitudeDegree;
 
-    bool isSouth = (lat.latDirection == 'S' || lat.latDirection == 1 || lat.latDirection == '1' || lon.latDirection == 'S');
-    bool isWest  = (lon.lonDirection == 'W' || lon.lonDirection == 1 || lon.lonDirection == '1' ||
-                    lat.lonDirection == 'W' || lat.lonDirection == 1 || lat.lonDirection == '1' ||
-                    lon.latDirection == 'W');
-
+    bool isSouth = (lon.lonDirection == 'S' || lon.lonDirection == 1 || lon.lonDirection == '1');
+    bool isWest  = (lat.latDirection == 'W' || lat.latDirection == 1 || lat.latDirection == '1');
     if (isSouth) latDeg = -latDeg;
     if (isWest)  lngDeg = -lngDeg;
 
@@ -70,6 +67,7 @@ namespace gnss {
       g_last.latDeg = latDeg;
       g_last.lngDeg = lngDeg;
       g_last.altMeters = g_gnss.getAlt();
+      g_last.headingDeg = static_cast<float>(g_gnss.getCog());
       g_last.satsUsed = sats;
       g_last.updatedAtMs = nowMs;
     } else {
