@@ -46,13 +46,30 @@ namespace cyclist_store {
         }
     }
 
+    // ── RSSI smoothing helper (shared by both packet types) ───────────────────
+    void update_rssi(int slot, bool has_rssi, int8_t rssi_dbm) {
+        bool  had_rssi  = cyclists[slot].has_rssi;
+        float prev_rssi = cyclists[slot].rssi_smoothed_dbm;
+
+        cyclists[slot].has_rssi = has_rssi;
+        cyclists[slot].rssi_dbm = rssi_dbm;
+
+        if (has_rssi) {
+            cyclists[slot].rssi_smoothed_dbm = had_rssi
+                ? (config::rssi_smoothing_alpha * static_cast<float>(rssi_dbm) +
+                   (1.0f - config::rssi_smoothing_alpha) * prev_rssi)
+                : static_cast<float>(rssi_dbm);
+        }
+    }
+
     bool parse_cyclist_packet(
         const uint8_t mac[6],
         const char* json,
         bool has_rssi,
         int8_t rssi_dbm
     ) {
-        StaticJsonDocument<256> doc;
+        // Bump buffer slightly for the larger GPS packet (13 fields).
+        StaticJsonDocument<384> doc;
         DeserializationError error = deserializeJson(doc, json);
         if (error) {
             Serial.print("Bad JSON: ");
@@ -60,6 +77,38 @@ namespace cyclist_store {
             return false;
         }
 
+        const char* packet_mode = doc["mode"] | "";
+
+        // ── Find or allocate slot ─────────────────────────────────────────────
+        int index = find_cyclist_by_mac(mac);
+        if (index < 0) index = find_free_cyclist_slot();
+        if (index < 0) index = find_oldest_cyclist_slot();
+
+        cyclists[index].is_active = true;
+        memcpy(cyclists[index].mac, mac, 6);
+        cyclists[index].last_seen_ms = millis();
+
+        update_rssi(index, has_rssi, rssi_dbm);
+
+        // ── Remote packet: {"mode":"remote","cri":0|1|2|3} ───────────────────
+        if (strcmp(packet_mode, "remote") == 0) {
+            if (!doc["cri"].is<int>()) {
+                Serial.println("Rejected remote packet: missing cri");
+                return false;
+            }
+
+            cyclists[index].has_cyclist_state = true;
+            switch (doc["cri"].as<int>()) {
+                case 1: cyclists[index].cyclist_state = State::Alert;   break;
+                case 2: cyclists[index].cyclist_state = State::Warning; break;
+                case 3: cyclists[index].cyclist_state = State::Danger;  break;
+                default: cyclists[index].cyclist_state = State::Safe;   break;
+            }
+            return true;
+        }
+
+        // ── GPS packet: {"mode":"gps","lat":...,"lng":...,...} ────────────────
+        // Also accepts packets with no "mode" field for backwards compatibility.
         if (!doc["lat"].is<double>() || !doc["lng"].is<double>()) {
             Serial.println("Rejected packet: missing lat/lng");
             return false;
@@ -81,49 +130,11 @@ namespace cyclist_store {
             return false;
         }
 
-        int index = find_cyclist_by_mac(mac);
-        if (index < 0) index = find_free_cyclist_slot();
-        if (index < 0) index = find_oldest_cyclist_slot();
-
-        bool  had_rssi           = cyclists[index].has_rssi;
-        float prev_smoothed_rssi = cyclists[index].rssi_smoothed_dbm;
-
-        cyclists[index].is_active  = true;
-        memcpy(cyclists[index].mac, mac, 6);
-        cyclists[index].lat        = lat;
-        cyclists[index].lng        = lng;
-        cyclists[index].speed_kmph = speed_kmph;
-        cyclists[index].has_rssi   = has_rssi;
-        cyclists[index].rssi_dbm   = rssi_dbm;
-
-        if (has_rssi) {
-            if (!had_rssi) {
-                cyclists[index].rssi_smoothed_dbm = static_cast<float>(rssi_dbm);
-            } else {
-                float alpha = config::rssi_smoothing_alpha;
-                cyclists[index].rssi_smoothed_dbm =
-                    (alpha * static_cast<float>(rssi_dbm)) +
-                    ((1.0f - alpha) * prev_smoothed_rssi);
-            }
-        }
-
-        // Remote mode: parse optional "state" field sent by cyclist firmware.
-        // 0 = safe, 1 = alert, 2 = warning, 3 = danger.
-        // Field absence is normal in Real/Demo modes — just clears the flag.
-        if (doc["state"].is<int>()) {
-            cyclists[index].has_cyclist_state = true;
-            switch (doc["state"].as<int>()) {
-                case 1: cyclists[index].cyclist_state = State::Alert;   break;
-                case 2: cyclists[index].cyclist_state = State::Warning; break;
-                case 3: cyclists[index].cyclist_state = State::Danger;  break;
-                default: cyclists[index].cyclist_state = State::Safe;   break;
-            }
-        } else {
-            cyclists[index].has_cyclist_state = false;
-            cyclists[index].cyclist_state     = State::Safe;
-        }
-
-        cyclists[index].last_seen_ms = millis();
+        cyclists[index].lat               = lat;
+        cyclists[index].lng               = lng;
+        cyclists[index].speed_kmph        = speed_kmph;
+        cyclists[index].has_cyclist_state = false;
+        cyclists[index].cyclist_state     = State::Safe;
         return true;
     }
 

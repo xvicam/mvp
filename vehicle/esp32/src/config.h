@@ -5,27 +5,27 @@
 
 namespace config {
     // ── Inputs ───────────────────────────────────────────────────────────────
-    constexpr uint8_t manual_btn_pin = 26;
-    constexpr uint8_t mode_btn_pin   = 15;
+    constexpr uint8_t manual_btn_pin = 26; //D3
+    constexpr uint8_t mode_btn_pin   = 15; //A4
 
     // ── GPS UART (UART2) ─────────────────────────────────────────────────────
-    constexpr uint8_t gps_serial_rx_pin = 16;
-    constexpr uint8_t gps_serial_tx_pin = 17;
+    constexpr uint8_t gps_serial_rx_pin = 16; //D11
+    constexpr uint8_t gps_serial_tx_pin = 17; //D10
 
     // ── Internal Outputs ─────────────────────────────────────────────────────
-    constexpr uint8_t sys_mode_red_pin   = 18;
-    constexpr uint8_t sys_mode_green_pin = 23;
-    constexpr uint8_t sys_mode_blue_pin  = 4;
-    constexpr uint8_t vib_mode_red_pin   = 19;
-    constexpr uint8_t vib_mode_green_pin = 22;
-    constexpr uint8_t vib_mode_blue_pin  = 21;
-    constexpr uint8_t gps_led_pin        = 12;
+    constexpr uint8_t sys_mode_red_pin   = 18; //SCK
+    constexpr uint8_t sys_mode_green_pin = 23; //MOSI
+    constexpr uint8_t sys_mode_blue_pin  = 4;  //D12
+    constexpr uint8_t vib_mode_red_pin   = 19; //MISO
+    constexpr uint8_t vib_mode_green_pin = 22; //SCL
+    constexpr uint8_t vib_mode_blue_pin  = 21; //SDA
+    constexpr uint8_t gps_led_pin        = 12; // D13
 
     // ── External Outputs (steering wheel cover, MOSFET-driven) ────────────────
-    constexpr uint8_t motor_pin           = 25;
-    constexpr uint8_t collision_red_pin   = 2;
-    constexpr uint8_t collision_green_pin = 13;
-    constexpr uint8_t collision_blue_pin  = 14;
+    constexpr uint8_t motor_pin           = 25; //D2
+    constexpr uint8_t collision_red_pin   = 2;  //D9
+    constexpr uint8_t collision_green_pin = 13; //D7
+    constexpr uint8_t collision_blue_pin  = 14; //D6
 
     // ── Serial ───────────────────────────────────────────────────────────────
     constexpr uint32_t serial_baud = 115200;
