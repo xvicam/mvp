@@ -13,6 +13,7 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.READ_CONTACTS" />
     <uses-permission android:name="android.permission.SEND_SMS" />
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <application
         android:name=".VICAMApplication"
@@ -22,6 +23,11 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        
+        <meta-data
+            android:name="com.google.android.geo.API_KEY"
+            android:value="AIzaSyDckCFuAQLdvwQuumlSkKMmp4eeIcZ7cgM" />
+            
         <activity
             android:exported="true"
             android:name=".MainActivity">
@@ -39,6 +45,9 @@
             android:exported="false" />
         <activity
             android:name=".EmergencyContactsActivity"
+            android:exported="false" />
+        <activity
+            android:name=".YourStatsActivity"
             android:exported="false" />
     </application>
 

@@ -11,35 +11,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 
-/**
- * Singleton that survives activity recreation so toggle/field state
- * is not lost when the user navigates away and comes back.
- */
-object StaticSensorState {
-    var useStaticGps = false
-    var useStaticImu = false
-    var useStaticSpeed = false
-    var useStaticHeading = false
-
-    var lat = "52.4862"
-    var lng = "-1.8904"
-    var alt = "150.0"
-    var ax = "0.0"
-    var ay = "0.0"
-    var az = "9.81"
-    var gx = "0.0"
-    var gy = "0.0"
-    var gz = "0.0"
-    var speed = "10.0"
-    var heading = "90.0"
-}
-
 @Composable
 fun BicycleDashboard(
     device: BicycleDevice,
     onDisconnect: () -> Unit,
     onGoBack: () -> Unit = onDisconnect
 ) {
+    val locationProvider = remember { LocationProviderFactory.create() }
+    
     // Use the singleton so state survives activity recreation
     var useStaticGps by remember { mutableStateOf(StaticSensorState.useStaticGps) }
     var useStaticImu by remember { mutableStateOf(StaticSensorState.useStaticImu) }
@@ -148,6 +127,24 @@ fun BicycleDashboard(
                         OutlinedTextField(value = staticLat, onValueChange = { staticLat = it; syncToSingleton(); sendValues() }, label = { Text("Lat") }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true)
                         OutlinedTextField(value = staticLng, onValueChange = { staticLng = it; syncToSingleton(); sendValues() }, label = { Text("Lng") }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true)
                         OutlinedTextField(value = staticAlt, onValueChange = { staticAlt = it; syncToSingleton(); sendValues() }, label = { Text("Alt") }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true)
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = {
+                            locationProvider.getCurrentLocation(
+                                onSuccess = { lat, lng, alt ->
+                                    staticLat = lat.toString()
+                                    staticLng = lng.toString()
+                                    staticAlt = alt.toString()
+                                    syncToSingleton()
+                                    sendValues()
+                                },
+                                onError = { /* TODO: Show error message */ }
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Use Phone GPS Location")
                     }
                 }
 

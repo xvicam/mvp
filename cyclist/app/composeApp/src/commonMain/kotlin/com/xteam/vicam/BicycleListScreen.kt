@@ -7,6 +7,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -22,7 +23,8 @@ fun BicycleListScreen(
     connectedDevices: List<BicycleDevice>,
     onAddClick: () -> Unit,
     onDeviceClick: (BicycleDevice) -> Unit,
-    onEmergencyContactsClick: (() -> Unit)? = null
+    onEmergencyContactsClick: (() -> Unit)? = null,
+    onYourStatsClick: (() -> Unit)? = null
 ) {
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -47,6 +49,16 @@ fun BicycleListScreen(
                         onEmergencyContactsClick?.invoke()
                     },
                     icon = { Icon(Icons.Default.Phone, contentDescription = null) },
+                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                )
+                NavigationDrawerItem(
+                    label = { Text("Your Stats") },
+                    selected = false,
+                    onClick = {
+                        scope.launch { drawerState.close() }
+                        onYourStatsClick?.invoke()
+                    },
+                    icon = { Icon(Icons.Default.Person, contentDescription = null) },
                     modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
                 )
             }

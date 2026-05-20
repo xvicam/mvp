@@ -16,16 +16,26 @@ class AndroidEmergencyManager(private val context: Context) : EmergencyManager {
         lng: Double,
         contacts: List<EmergencyContact>
     ) {
-        val address = getAddressFromLocation(lat, lng)
+        val address = if (StaticSensorState.useStaticGps) {
+            StaticSensorState.address
+        } else {
+            getAddressFromLocation(lat, lng)
+        }
+        
         val time = getCurrentTimeFormatted()
-        val message = "$userName has got into a cyclist crash in $address at $time."
+        // Including raw GPS data and a maps link as requested
+        val message = "$userName has got into a cyclist crash in $address at $time. " +
+                "Coordinates: $lat, $lng. " +
+                "Maps: https://www.google.com/maps/search/?api=1&query=$lat,$lng"
         
         withContext(Dispatchers.IO) {
             try {
                 val smsManager = context.getSystemService(SmsManager::class.java)
                 contacts.forEach { contact ->
                     try {
-                        smsManager.sendTextMessage(contact.phoneNumber, null, message, null, null)
+                        // Using sendMultipartTextMessage because the message might exceed 160 characters
+                        val parts = smsManager.divideMessage(message)
+                        smsManager.sendMultipartTextMessage(contact.phoneNumber, null, parts, null, null)
                     } catch (e: Exception) {
                         e.printStackTrace()
                     }
@@ -42,7 +52,14 @@ class AndroidEmergencyManager(private val context: Context) : EmergencyManager {
                 val geocoder = Geocoder(context, Locale.getDefault())
                 val addresses = geocoder.getFromLocation(lat, lng, 1)
                 if (!addresses.isNullOrEmpty()) {
-                    addresses[0].getAddressLine(0) ?: "$lat, $lng"
+                    val addr = addresses[0]
+                    // Try to get a more specific address than just "United Kingdom"
+                    val line = addr.getAddressLine(0)
+                    if (line != null && line.isNotBlank()) {
+                        line
+                    } else {
+                        "$lat, $lng"
+                    }
                 } else {
                     "$lat, $lng"
                 }
