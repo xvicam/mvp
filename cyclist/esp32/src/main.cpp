@@ -8,6 +8,7 @@
 #include <WiFi.h>
 #include <NimBLEDevice.h>
 #include <esp_sleep.h>
+#include <mbedtls/aes.h>
 
 #include "../include/AccGyro.h"
 #include "../include/CrashDetector.h"
@@ -211,6 +212,34 @@ namespace espNow {
     constexpr uint32_t kSendPeriodMs = 250;
     uint32_t messageCounter = 0;
     bool isInitialised = false;
+
+    esp_err_t send_encrypted(const uint8_t* peer_addr, const char* plaintext) {
+        mbedtls_aes_context aes;
+        mbedtls_aes_init(&aes);
+        const unsigned char key[16] = {'V','I','C','A','M','_','E','S','P','_','S','E','C','R','E','T'};
+        mbedtls_aes_setkey_enc(&aes, key, 128);
+
+        unsigned char iv[16] = {'v','i','c','a','m','_','i','v','_','0','0','0','0','0','0','0'};
+
+        size_t input_len = strlen(plaintext) + 1; // Include null terminator
+        size_t out_len = ((input_len + 15) / 16) * 16;
+
+        unsigned char padded_input[256] = {0};
+        if (out_len > sizeof(padded_input)) return ESP_FAIL;
+
+        memcpy(padded_input, plaintext, input_len);
+        uint8_t pad_val = out_len - input_len;
+        for (size_t i = input_len; i < out_len; i++) {
+            padded_input[i] = pad_val;
+        }
+
+        unsigned char output[256] = {0};
+        mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_ENCRYPT, out_len, iv, padded_input, output);
+        mbedtls_aes_free(&aes);
+
+        return esp_now_send(peer_addr, output, out_len);
+    }
+
     static double haversineMeters(double lat1Deg, double lon1Deg, double lat2Deg, double lon2Deg) {
         constexpr double kPi = 3.14159265358979323846;
         constexpr double kEarthRadiusM = 6371000.0;
@@ -375,7 +404,7 @@ namespace espNow {
                     headingRefFix = currentFix;
                 } else if (coordsChanged) {
                     double distM = haversineMeters(headingRefFix.latDeg, headingRefFix.lngDeg, currentFix.latDeg, currentFix.lngDeg);
-                    if (distM > 2.5) { 
+                    if (distM > 2.5) {
                         const double kPi = 3.14159265358979323846;
                         double lat1 = headingRefFix.latDeg * kPi / 180.0;
                         double lon1 = headingRefFix.lngDeg * kPi / 180.0;
@@ -387,7 +416,7 @@ namespace espNow {
                         double bearing = std::atan2(y, x);
                         bearing = std::fmod((bearing * 180.0 / kPi) + 360.0, 360.0);
                         lastHeadingDeg = static_cast<float>(bearing);
-                        
+
                         headingRefFix = currentFix; // Update our baseline point
                     }
                 }
@@ -426,7 +455,7 @@ namespace espNow {
                 gpsValid ? lng : 0.0,
                 gpsValid ? alt : 0.0,
                 ax, ay, az, gx, gy, gz, speed, accelMag, headingDeg);
-        esp_now_send(broadcastAddress, reinterpret_cast<const uint8_t *>(message), strlen(message) + 1);
+        send_encrypted(broadcastAddress, message);
     }
 
     void sendCrashAlert(uint32_t crashId, float peakDynamicMps2, const ImuOrientation &o) {
@@ -441,7 +470,7 @@ namespace espNow {
                  o.orientationLabel,
                  o.isMoving ? 1 : 0);
 
-        if (esp_now_send(broadcastAddress, reinterpret_cast<const uint8_t *>(message), strlen(message) + 1) == ESP_OK) {
+        if (send_encrypted(broadcastAddress, message) == ESP_OK) {
             led::pulse(120);
         } else {
             led::pulse(400);
@@ -995,9 +1024,7 @@ void loop() {
             };
 
             const char* msg = manualAlerts[sys::manualAlertIndex];
-            esp_err_t result = esp_now_send(espNow::broadcastAddress,
-                                           reinterpret_cast<const uint8_t*>(msg),
-                                           strlen(msg) + 1);
+            esp_err_t result = espNow::send_encrypted(espNow::broadcastAddress, msg);
             Serial.printf("[Manual] Broadcasting: %s (%s)\n", msg, result == ESP_OK ? "OK" : "FAIL");
             espNow::led::pulse(80);
         }
