@@ -10,7 +10,7 @@
 
 namespace debug_log {
     void print_debug() {
-        if (state_controller::get_current_mode() == Mode::Manual) {
+        if (state_controller::get_current_mode() == Mode::Local) {
             return;
         }
 

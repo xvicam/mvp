@@ -24,10 +24,10 @@ namespace serial_control {
                 continue;
             }
 
-            if (state_controller::get_current_mode() == Mode::Manual) {
+            if (state_controller::get_current_mode() == Mode::Local) {
                 state_controller::handle_manual_command(c);
             } else {
-                Serial.println("Ignored command. Press M to enter MANUAL mode.");
+                Serial.println("Ignored command. Press M to cycle into MANUAL mode.");
             }
         }
     }
