@@ -42,14 +42,11 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
 
-        // Initialize Settings Provider before everything else
+        // Initialize Providers before everything else
         SettingsProviderHolder.provider = AndroidSettingsProvider(applicationContext)
-
-        // Initialize the contact manager
         ContactManagerProvider.manager = AndroidContactManager(applicationContext)
-
-        // Initialize the emergency manager
         EmergencyManagerProvider.manager = AndroidEmergencyManager(applicationContext)
+        LocationProviderFactory.init(applicationContext)
 
         // Initialize the scanner if not already done
         try {

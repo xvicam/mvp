@@ -17,6 +17,8 @@ fun BicycleDashboard(
     onDisconnect: () -> Unit,
     onGoBack: () -> Unit = onDisconnect
 ) {
+    val locationProvider = remember { LocationProviderFactory.create() }
+    
     // Use the singleton so state survives activity recreation
     var useStaticGps by remember { mutableStateOf(StaticSensorState.useStaticGps) }
     var useStaticImu by remember { mutableStateOf(StaticSensorState.useStaticImu) }
@@ -125,6 +127,24 @@ fun BicycleDashboard(
                         OutlinedTextField(value = staticLat, onValueChange = { staticLat = it; syncToSingleton(); sendValues() }, label = { Text("Lat") }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true)
                         OutlinedTextField(value = staticLng, onValueChange = { staticLng = it; syncToSingleton(); sendValues() }, label = { Text("Lng") }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true)
                         OutlinedTextField(value = staticAlt, onValueChange = { staticAlt = it; syncToSingleton(); sendValues() }, label = { Text("Alt") }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true)
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = {
+                            locationProvider.getCurrentLocation(
+                                onSuccess = { lat, lng, alt ->
+                                    staticLat = lat.toString()
+                                    staticLng = lng.toString()
+                                    staticAlt = alt.toString()
+                                    syncToSingleton()
+                                    sendValues()
+                                },
+                                onError = { /* TODO: Show error message */ }
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Use Phone GPS Location")
                     }
                 }
 
