@@ -421,7 +421,7 @@ namespace espNow {
 
         char message[256];
         snprintf(message, sizeof(message),
-                "{\"lat\":%.7f,\"lng\":%.7f,\"alt\":%.2f,\"ax\":%.2f,\"ay\":%.2f,\"az\":%.2f,\"gx\":%.2f,\"gy\":%.2f,\"gz\":%.2f,\"speed\":%.2f,\"accel\":%.2f,\"heading\":%.2f}",
+                "{\"mode\":\"gps\",\"lat\":%.7f,\"lng\":%.7f,\"alt\":%.2f,\"ax\":%.2f,\"ay\":%.2f,\"az\":%.2f,\"gx\":%.2f,\"gy\":%.2f,\"gz\":%.2f,\"speed\":%.2f,\"accel\":%.2f,\"heading\":%.2f}",
                 gpsValid ? lat : 0.0,
                 gpsValid ? lng : 0.0,
                 gpsValid ? alt : 0.0,
@@ -988,10 +988,10 @@ void loop() {
             // 2 = approaching    (3 presses)
             // 3 = about_to_crash (4 presses)
             static const char* manualAlerts[] = {
-                "{\"type\":\"manual\",\"alert\":\"safe_distance\",\"message\":\"I am at safe distance\"}",
-                "{\"type\":\"manual\",\"alert\":\"alert_zone\",\"message\":\"I am in alert zone\"}",
-                "{\"type\":\"manual\",\"alert\":\"approaching\",\"message\":\"I am approaching\"}",
-                "{\"type\":\"manual\",\"alert\":\"about_to_crash\",\"message\":\"I am about to crash\"}"
+                "{\"mode\":\"remote\",\"cri\":0}",
+                "{\"mode\":\"remote\",\"cri\":1}",
+                "{\"mode\":\"remote\",\"cri\":2}",
+                "{\"mode\":\"remote\",\"cri\":3}"
             };
 
             const char* msg = manualAlerts[sys::manualAlertIndex];

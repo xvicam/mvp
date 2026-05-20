@@ -49,7 +49,7 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
     }
 
     private val _crashEvents = MutableSharedFlow<CrashEvent>(
-        replay = 1, // 1 to ensure UI gets the latest event if it starts late
+        replay = 1,
         extraBufferCapacity = 16
     )
     override val crashEvents: SharedFlow<CrashEvent> = _crashEvents
@@ -78,21 +78,25 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
         @SuppressLint("MissingPermission")
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == BluetoothDevice.ACTION_BOND_STATE_CHANGED) {
-                val bondState =
-                    intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.ERROR)
-                val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    intent.getParcelableExtra(
-                        BluetoothDevice.EXTRA_DEVICE,
-                        BluetoothDevice::class.java
-                    )
-                } else {
-                    @Suppress("DEPRECATION")
-                    intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
-                }
+                try {
+                    val bondState =
+                        intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.ERROR)
+                    val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        intent.getParcelableExtra(
+                            BluetoothDevice.EXTRA_DEVICE,
+                            BluetoothDevice::class.java
+                        )
+                    } else {
+                        @Suppress("DEPRECATION")
+                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                    }
 
-                if (bondState == BluetoothDevice.BOND_BONDED && device != null && device.address == pendingDeviceAddressForNotificationEnable) {
-                    activeGatts[device.address]?.let { tryEnableNotifications(it) }
-                    pendingDeviceAddressForNotificationEnable = null
+                    if (bondState == BluetoothDevice.BOND_BONDED && device != null && device.address == pendingDeviceAddressForNotificationEnable) {
+                        activeGatts[device.address]?.let { tryEnableNotifications(it) }
+                        pendingDeviceAddressForNotificationEnable = null
+                    }
+                } catch (e: SecurityException) {
+                    Log.e(TAG, "SecurityException in bondStateReceiver", e)
                 }
             }
         }
@@ -108,43 +112,47 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
     private val scanCallback = object : ScanCallback() {
         @SuppressLint("MissingPermission")
         override fun onScanResult(callbackType: Int, result: ScanResult) {
-            val device = result.device
-            val scanRecord = result.scanRecord
-            val deviceNameFallback = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                @Suppress("MissingPermission")
-                device.alias ?: device.name
-            } else {
-                @Suppress("MissingPermission")
-                device.name
-            }
-            val rawName = scanRecord?.deviceName ?: deviceNameFallback ?: "Unknown Device"
-            val serviceUuids = scanRecord?.serviceUuids?.map { it.uuid } ?: emptyList()
+            try {
+                val device = result.device
+                val scanRecord = result.scanRecord
+                val deviceNameFallback = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    @Suppress("MissingPermission")
+                    device.alias ?: device.name
+                } else {
+                    @Suppress("MissingPermission")
+                    device.name
+                }
+                val rawName = scanRecord?.deviceName ?: deviceNameFallback ?: "Unknown Device"
+                val serviceUuids = scanRecord?.serviceUuids?.map { it.uuid } ?: emptyList()
 
-            val name = if (rawName == "Unknown Device" && serviceUuids.contains(SERVICE_UUID)) {
-                "ESP32 (Cyclist)"
-            } else {
-                rawName
-            }
+                val name = if (rawName == "Unknown Device" && serviceUuids.contains(SERVICE_UUID)) {
+                    "ESP32 (Cyclist)"
+                } else {
+                    rawName
+                }
 
-            val isAlreadyDiscovered = lastSeenMap.containsKey(device.address)
-            if (isAlreadyDiscovered ||
-                name.contains("Cyclist", ignoreCase = true) ||
-                name.contains("VICAM", ignoreCase = true) ||
-                name.contains("ESP32", ignoreCase = true) ||
-                serviceUuids.contains(SERVICE_UUID)) {
+                val isAlreadyDiscovered = lastSeenMap.containsKey(device.address)
+                if (isAlreadyDiscovered ||
+                    name.contains("Cyclist", ignoreCase = true) ||
+                    name.contains("VICAM", ignoreCase = true) ||
+                    name.contains("ESP32", ignoreCase = true) ||
+                    serviceUuids.contains(SERVICE_UUID)) {
 
-                lastSeenMap[device.address] = System.currentTimeMillis()
-                _discoveredDevices.update { current ->
-                    val existingIndex = current.indexOfFirst { it.address == device.address }
-                    if (existingIndex != -1) {
-                        val existing = current[existingIndex]
-                        val updatedName = if (name != "Unknown Device") name else existing.name
-                        if (existing.rssi == result.rssi && existing.name == updatedName) current
-                        else current.toMutableList().apply { set(existingIndex, existing.copy(rssi = result.rssi, name = updatedName)) }
-                    } else {
-                        current + BicycleDevice(name, device.address, result.rssi, SERVICE_UUID.toString())
+                    lastSeenMap[device.address] = System.currentTimeMillis()
+                    _discoveredDevices.update { current ->
+                        val existingIndex = current.indexOfFirst { it.address == device.address }
+                        if (existingIndex != -1) {
+                            val existing = current[existingIndex]
+                            val updatedName = if (name != "Unknown Device") name else existing.name
+                            if (existing.rssi == result.rssi && existing.name == updatedName) current
+                            else current.toMutableList().apply { set(existingIndex, existing.copy(rssi = result.rssi, name = updatedName)) }
+                        } else {
+                            current + BicycleDevice(name, device.address, result.rssi, SERVICE_UUID.toString())
+                        }
                     }
                 }
+            } catch (e: SecurityException) {
+                Log.e(TAG, "SecurityException in scanCallback", e)
             }
         }
     }
@@ -152,31 +160,45 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
     @SuppressLint("MissingPermission")
     override fun startScanning(filterUuid: String?) {
         if (_isScanning.value) return
-        _discoveredDevices.value = emptyList()
-        lastSeenMap.clear()
-        val filters = listOf(
-            ScanFilter.Builder().setServiceUuid(ParcelUuid(SERVICE_UUID)).build(),
-            ScanFilter.Builder().setDeviceName("VICAM").build()
-        )
-        val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
-        scanner?.startScan(filters, settings, scanCallback)
-        _isScanning.value = true
-        mainHandler.postDelayed(cleanupRunnable, 2000)
+        try {
+            _discoveredDevices.value = emptyList()
+            lastSeenMap.clear()
+            val filters = listOf(
+                ScanFilter.Builder().setServiceUuid(ParcelUuid(SERVICE_UUID)).build(),
+                ScanFilter.Builder().setDeviceName("VICAM").build()
+            )
+            val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
+            scanner?.startScan(filters, settings, scanCallback)
+            _isScanning.value = true
+            mainHandler.postDelayed(cleanupRunnable, 2000)
+        } catch (e: SecurityException) {
+            Log.e(TAG, "Missing permissions to start scan", e)
+            Toast.makeText(context, "Bluetooth Scan permission required", Toast.LENGTH_SHORT).show()
+        }
     }
 
     @SuppressLint("MissingPermission")
     override fun stopScanning() {
         if (!_isScanning.value) return
-        scanner?.stopScan(scanCallback)
-        _isScanning.value = false
-        mainHandler.removeCallbacks(cleanupRunnable)
+        try {
+            scanner?.stopScan(scanCallback)
+            _isScanning.value = false
+            mainHandler.removeCallbacks(cleanupRunnable)
+        } catch (e: SecurityException) {
+            Log.e(TAG, "Missing permissions to stop scan", e)
+        }
     }
 
     @SuppressLint("MissingPermission")
     override fun connect(device: BicycleDevice) {
-        val remoteDevice = bluetoothAdapter?.getRemoteDevice(device.address) ?: return
-        val gatt = remoteDevice.connectGatt(context, true, gattCallback, BluetoothDevice.TRANSPORT_LE)
-        activeGatts[device.address] = gatt
+        try {
+            val remoteDevice = bluetoothAdapter?.getRemoteDevice(device.address) ?: return
+            val gatt = remoteDevice.connectGatt(context, true, gattCallback, BluetoothDevice.TRANSPORT_LE)
+            activeGatts[device.address] = gatt
+        } catch (e: SecurityException) {
+            Log.e(TAG, "Missing BLUETOOTH_CONNECT permission to connect to ${device.name}", e)
+            Toast.makeText(context, "Bluetooth Connect permission required", Toast.LENGTH_SHORT).show()
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -196,6 +218,8 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
                     }
                     Log.d(TAG, "Sent command to $deviceAddress: $command")
                 }
+            } catch (e: SecurityException) {
+                Log.e(TAG, "Missing BLUETOOTH_CONNECT permission to send command", e)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to send command $command", e)
             }
@@ -205,7 +229,6 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
     }
 
     override fun sendSensitivity(sensitivity: Float) {
-        // Find first active device to send sensitivity to
         activeGatts.keys.firstOrNull()?.let { address ->
             sendCommand(address, "SENSITIVITY:$sensitivity")
         }
@@ -214,19 +237,27 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
     private val gattCallback = object : BluetoothGattCallback() {
         @SuppressLint("MissingPermission")
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-            if (newState == BluetoothProfile.STATE_CONNECTED) {
-                Log.d(TAG, "GATT Connected. Requesting MTU 517...")
-                gatt.requestMtu(517)
-            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                Log.d(TAG, "GATT Disconnected")
-                activeGatts.remove(gatt.device.address)
+            try {
+                if (newState == BluetoothProfile.STATE_CONNECTED) {
+                    Log.d(TAG, "GATT Connected. Requesting MTU 517...")
+                    gatt.requestMtu(517)
+                } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                    Log.d(TAG, "GATT Disconnected")
+                    activeGatts.remove(gatt.device.address)
+                }
+            } catch (e: SecurityException) {
+                Log.e(TAG, "SecurityException in onConnectionStateChange", e)
             }
         }
 
         @SuppressLint("MissingPermission")
         override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
-            Log.d(TAG, "MTU changed to $mtu, status=$status")
-            gatt.discoverServices()
+            try {
+                Log.d(TAG, "MTU changed to $mtu, status=$status")
+                gatt.discoverServices()
+            } catch (e: SecurityException) {
+                Log.e(TAG, "SecurityException in onMtuChanged", e)
+            }
         }
 
         @SuppressLint("MissingPermission")
@@ -253,16 +284,19 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
 
     @SuppressLint("MissingPermission")
     private fun tryEnableNotifications(gatt: BluetoothGatt) {
-        val characteristic = gatt.getService(SERVICE_UUID)?.getCharacteristic(CHARACTERISTIC_UUID) ?: return
-        gatt.setCharacteristicNotification(characteristic, true)
-        val descriptor = characteristic.getDescriptor(DESCRIPTOR_UUID) ?: return
-        @Suppress("DEPRECATION")
-        descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-        gatt.writeDescriptor(descriptor)
+        try {
+            val characteristic = gatt.getService(SERVICE_UUID)?.getCharacteristic(CHARACTERISTIC_UUID) ?: return
+            gatt.setCharacteristicNotification(characteristic, true)
+            val descriptor = characteristic.getDescriptor(DESCRIPTOR_UUID) ?: return
+            @Suppress("DEPRECATION")
+            descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+            gatt.writeDescriptor(descriptor)
+        } catch (e: SecurityException) {
+            Log.e(TAG, "Missing BLUETOOTH_CONNECT permission to enable notifications", e)
+        }
     }
 
     private fun handleNotifyBytes(gatt: BluetoothGatt, rawData: ByteArray) {
-        // Run on Main thread to avoid concurrent access to notifyTextBuffer
         mainHandler.post {
             try {
                 val chunk = rawData.toString(Charsets.UTF_8)
@@ -322,7 +356,6 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
                     }
                 }
 
-                // Fallback for truncated/malformed but obviously crash data
                 if (!handledAny && buffered.contains("\"type\":\"crash\"") && buffered.length > 50 && !buffered.endsWith("}")) {
                     Log.d(TAG, "Triggering emergency fallback for partial data")
                     if (lastProcessedCrashId != -999L) {
@@ -361,6 +394,8 @@ class AndroidBluetoothScanner(private val context: Context) : BluetoothScanner {
                 }
                 Log.d(TAG, "Sent ACK back to ESP32")
             }
+        } catch (e: SecurityException) {
+            Log.e(TAG, "Missing BLUETOOTH_CONNECT permission to send ACK", e)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to send ACK", e)
         }

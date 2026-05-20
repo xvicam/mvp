@@ -20,12 +20,13 @@ class VICAMApplication : Application() {
         ContactManagerProvider.manager = AndroidContactManager(applicationContext)
         EmergencyManagerProvider.manager = AndroidEmergencyManager(applicationContext)
         SoundManagerProvider.manager = AndroidSoundManager(applicationContext)
+        LocationProviderFactory.init(applicationContext)
         
         // Initialize scanner early
         val scanner = AndroidBluetoothScanner(applicationContext)
         BluetoothScannerProvider.scanner = scanner
         
-        // Global listener for crash events to update the shared st`ate
+        // Global listener for crash events to update the shared state
         applicationScope.launch {
             scanner.crashEvents.collectLatest { event ->
                 Log.d("VICAMApplication", "Global crash listener received: ${event.crashId}")

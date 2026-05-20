@@ -100,6 +100,9 @@ class MainActivity : ComponentActivity() {
                             },
                             onEmergencyContactsClick = {
                                 startActivity(Intent(this@MainActivity, EmergencyContactsActivity::class.java))
+                            },
+                            onYourStatsClick = {
+                                startActivity(Intent(this@MainActivity, YourStatsActivity::class.java))
                             }
                         )
                         CrashDialog()

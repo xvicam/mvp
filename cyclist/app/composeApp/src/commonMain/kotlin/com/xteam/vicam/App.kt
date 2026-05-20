@@ -35,6 +35,9 @@ fun App() {
                 },
                 onEmergencyContactsClick = {
                     showEmergencyContacts = true
+                },
+                onYourStatsClick = {
+                    // For a fully shared app we would route, but this is a stub.
                 }
             )
         }

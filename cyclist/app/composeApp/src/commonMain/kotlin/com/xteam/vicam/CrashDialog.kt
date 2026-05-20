@@ -147,8 +147,17 @@ fun CrashDialog() {
 }
 
 private suspend fun sendEmergencyAlert(crash: CrashEvent, emergencyManager: EmergencyManager) {
-    val lat = crash.gps?.lat ?: 0.0
-    val lng = crash.gps?.lng ?: 0.0
+    val lat: Double
+    val lng: Double
+    val useStatic = StaticSensorState.useStaticGps
+
+    if (useStatic) {
+        lat = StaticSensorState.lat.toDoubleOrNull() ?: 0.0
+        lng = StaticSensorState.lng.toDoubleOrNull() ?: 0.0
+    } else {
+        lat = crash.gps?.lat ?: 0.0
+        lng = crash.gps?.lng ?: 0.0
+    }
     
     emergencyManager.sendEmergencyAlert(
         userName = DeviceManager.userName,
