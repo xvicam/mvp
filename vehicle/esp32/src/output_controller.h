@@ -15,4 +15,7 @@ namespace output_controller {
     void set_collision_rgb(uint8_t r, uint8_t g, uint8_t b);
     void set_collision_rgb(const config::Rgb& rgb);
     void set_motor(uint8_t duty);
+
+    void init_power_led();
+    void set_power_led(bool on);
 }

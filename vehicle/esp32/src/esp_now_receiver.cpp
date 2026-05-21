@@ -99,6 +99,13 @@ namespace esp_now_receiver {
         return true;
     }
 
+    void deinit_esp_now_receiver() {
+        esp_now_deinit();
+        WiFi.disconnect(true);
+        WiFi.mode(WIFI_OFF);
+        delay(100);
+    }
+
     void process_pending_packet() {
         PendingPacket local;
 

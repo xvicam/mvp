@@ -7,6 +7,11 @@ namespace config {
     // ── Inputs ───────────────────────────────────────────────────────────────
     constexpr uint8_t manual_btn_pin = 26; //D3
     constexpr uint8_t mode_btn_pin   = 15; //A4
+    constexpr uint8_t pow_btn_pin    = 34; // RTC_GPIO4, input-only, external 10kΩ pull-up required
+    constexpr bool    pow_btn_active_low = true; // true: pressed=LOW, false: pressed=HIGH
+    constexpr uint8_t pow_btn_wakeup_level = pow_btn_active_low ? 0 : 1;
+    constexpr uint32_t pow_btn_release_ms = 120;
+    constexpr uint32_t pow_btn_wake_grace_ms = 500;
 
     // ── GPS UART (UART2) ─────────────────────────────────────────────────────
     constexpr uint8_t gps_serial_rx_pin = 16; //D11
@@ -20,6 +25,8 @@ namespace config {
     constexpr uint8_t vib_mode_green_pin = 22; //SCL
     constexpr uint8_t vib_mode_blue_pin  = 21; //SDA
     constexpr uint8_t gps_led_pin        = 12; // D13
+    constexpr uint8_t pow_led_pin        = 0;  // Active LOW: LOW = LED ON, HIGH = LED OFF. Boot-safe.
+
 
     // ── External Outputs (steering wheel cover, MOSFET-driven) ────────────────
     constexpr uint8_t motor_pin           = 25; //D2

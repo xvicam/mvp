@@ -1,5 +1,6 @@
 #include "output_controller.h"
 #include "config.h"
+#include <driver/gpio.h>
 
 namespace output_controller {
 
@@ -19,6 +20,8 @@ namespace output_controller {
 
         pinMode(config::gps_led_pin, OUTPUT);
         digitalWrite(config::gps_led_pin, LOW);
+
+        init_power_led();
     }
 
     void set_collision_rgb(uint8_t r, uint8_t g, uint8_t b) {
@@ -33,6 +36,19 @@ namespace output_controller {
 
     void set_motor(uint8_t duty) {
         ledcWrite(config::motor_pin, duty);
+    }
+
+    // Active LOW: GPIO LOW = LED on, GPIO HIGH = LED off.
+    // Must release any gpio_hold left from a previous deep sleep before init.
+
+    void init_power_led() {
+        gpio_hold_dis((gpio_num_t)config::pow_led_pin);
+        pinMode(config::pow_led_pin, OUTPUT);
+        digitalWrite(config::pow_led_pin, LOW); // LED on - system is awake
+    }
+
+    void set_power_led(bool on) {
+        digitalWrite(config::pow_led_pin, on ? LOW : HIGH);
     }
 
     // State  → tier:  Alert = low,  Warning = mid,  Danger = full
@@ -172,3 +188,4 @@ namespace output_controller {
         }
     }
 }
+
