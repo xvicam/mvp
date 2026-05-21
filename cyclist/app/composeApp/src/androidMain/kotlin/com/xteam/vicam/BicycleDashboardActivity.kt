@@ -22,7 +22,7 @@ class BicycleDashboardActivity : ComponentActivity() {
         }
 
         setContent {
-            MaterialTheme {
+            AppTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
