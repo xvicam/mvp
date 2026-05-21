@@ -9,6 +9,38 @@
 #include <Arduino.h>
 
 namespace debug_log {
+
+    // ── Closest-cyclist field ──────────────────────────────────────────────
+    //
+    // GPS / RSSI modes:  "12.34 m from AA:BB:CC:DD:EE:FF"
+    // Remote mode:       "AA:BB:CC:DD:EE:FF"  (no distance in remote mode)
+    // No cyclist:        "none"
+    //
+    // Two bugs fixed from original:
+    //  1. Distance was cast to int — 2.7 m would print as "2 m".
+    //  2. Remote mode always printed "none" because distance is -1 and
+    //     the guard required distance >= 0 before printing anything.
+
+    static void print_closest() {
+        const int    index    = risk_calculator::get_closest_cyclist_index();
+        const double distance = risk_calculator::get_closest_distance_m();
+
+        const CyclistData* cyclist = cyclist_store::get_cyclist_at(index);
+
+        if (!cyclist) {
+            Serial.print("none");
+            return;
+        }
+
+        if (distance >= 0.0) {
+            Serial.print(distance);
+            Serial.print(" m from ");
+        }
+        helpers::print_mac(cyclist->mac);
+    }
+
+    // ── Public API ─────────────────────────────────────────────────────────
+
     void print_debug() {
         if (state_controller::get_current_mode() == Mode::Local) {
             return;
@@ -42,28 +74,14 @@ namespace debug_log {
         Serial.print(cyclist_store::get_active_cyclist_count());
 
         Serial.print(" | Closest: ");
-
-        int closest_cyclist_index = risk_calculator::get_closest_cyclist_index();
-        int closest_distance_m = risk_calculator::get_closest_distance_m();
-
-        const CyclistData* closest_cyclist = cyclist_store::get_cyclist_at(closest_cyclist_index);
-
-        if (closest_cyclist && closest_distance_m >= 0) {
-            Serial.print(closest_distance_m);
-            Serial.print(" m from ");
-            helpers::print_mac(closest_cyclist->mac);
-        } else {
-            Serial.print("none");
-        }
+        print_closest();
 
         char time_buffer[12];
-
         if (vehicle_reader::get_utc_time(time_buffer, sizeof(time_buffer))) {
             Serial.print(" | UTC: ");
             Serial.print(time_buffer);
         }
 
         Serial.println();
-
     }
 }

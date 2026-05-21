@@ -5,10 +5,11 @@
 #include <TinyGPS++.h>
 
 namespace vehicle_reader {
-    TinyGPSPlus gps;
-    HardwareSerial gps_serial(2);
 
-    bool is_vehicle_moving_flag = false;
+    static TinyGPSPlus    gps;
+    static HardwareSerial gps_serial(2);
+
+    static bool is_vehicle_moving_flag = false;
 
     void init_gps() {
         gps_serial.begin(
@@ -38,14 +39,15 @@ namespace vehicle_reader {
         {
             return 0.0f;
         }
-        float speed = gps.speed.kmph();
+        const float speed = gps.speed.kmph();
         if (speed < 0.0f || speed > config::max_reasonable_vehicle_speed_kmph) {
             return 0.0f;
         }
         return speed;
     }
 
-    void update_vehicle_moving(float speed_kmph) {
+    // Hysteresis around the moving/stopped boundary so we don't flicker.
+    static void update_vehicle_moving(float speed_kmph) {
         if (!is_vehicle_moving_flag && speed_kmph >= config::moving_on_kmph) {
             is_vehicle_moving_flag = true;
         } else if (is_vehicle_moving_flag && speed_kmph <= config::moving_off_kmph) {
@@ -67,7 +69,7 @@ namespace vehicle_reader {
             data.lat = gps.location.lat();
             data.lng = gps.location.lng();
         } else {
-            // Clear the flag on GPS loss — prevents it stranding at true indefinitely.
+            // Clear the flag on GPS loss — prevents it stranding at true.
             is_vehicle_moving_flag = false;
         }
 
@@ -102,23 +104,23 @@ namespace vehicle_reader {
 
         Serial.print("Speed: ");
         if (gps.speed.isValid()) { Serial.print(gps.speed.kmph()); Serial.println(" km/h"); }
-        else Serial.println("unavailable");
+        else                       Serial.println("unavailable");
 
         Serial.print("Course: ");
         if (gps.course.isValid()) { Serial.print(gps.course.deg()); Serial.println(" deg"); }
-        else Serial.println("unavailable");
+        else                        Serial.println("unavailable");
 
         Serial.print("Satellites: ");
         if (gps.satellites.isValid()) Serial.println(gps.satellites.value());
-        else Serial.println("unavailable");
+        else                          Serial.println("unavailable");
 
         Serial.print("HDOP: ");
         if (gps.hdop.isValid()) Serial.println(gps.hdop.hdop());
-        else Serial.println("unavailable");
+        else                    Serial.println("unavailable");
 
         Serial.print("Altitude: ");
         if (gps.altitude.isValid()) { Serial.print(gps.altitude.meters()); Serial.println(" m"); }
-        else Serial.println("unavailable");
+        else                          Serial.println("unavailable");
 
         Serial.print("UTC time: ");
         if (gps.time.isValid()) {

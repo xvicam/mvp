@@ -15,7 +15,6 @@ namespace state_controller {
     void cycle_vib_mode();
     void cycle_manual_state();
 
-    void toggle_mode();
     void handle_manual_command(char command);
 
     void force_local_mode();

@@ -5,6 +5,7 @@
 
 namespace output_controller {
     void init_output();
+    void shutdown_outputs();
 
     void apply_output(State state, VibMode vib_mode = VibMode::Strength);
 

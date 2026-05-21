@@ -2,10 +2,11 @@
 #include "helpers.h"
 
 namespace state_controller {
-    Mode    current_mode     = Mode::GPS;
-    State   current_state    = State::Safe;
-    State   manual_state     = State::Safe;
-    VibMode current_vib_mode = VibMode::Strength;
+
+    static Mode    current_mode     = Mode::GPS;
+    static State   current_state    = State::Safe;
+    static State   manual_state     = State::Safe;
+    static VibMode current_vib_mode = VibMode::Strength;
 
     Mode    get_current_mode()     { return current_mode; }
     State   get_current_state()    { return current_state; }
@@ -18,8 +19,10 @@ namespace state_controller {
         switch (current_mode) {
             case Mode::GPS:    current_mode = Mode::RSSI;   break;
             case Mode::RSSI:   current_mode = Mode::Remote; break;
-            case Mode::Remote: current_mode = Mode::Local;
-                               current_state = manual_state; break;
+            case Mode::Remote:
+                current_mode  = Mode::Local;
+                current_state = manual_state;  // reflect manual state immediately
+                break;
             case Mode::Local:
             default:           current_mode = Mode::GPS;    break;
         }
@@ -52,9 +55,8 @@ namespace state_controller {
         Serial.println(helpers::state_name(manual_state));
     }
 
-    void toggle_mode() { cycle_system_mode(); }
-
     void handle_manual_command(char command) {
+        if (current_mode != Mode::Local) return;  // defensive — caller also checks
         switch (command) {
             case '0': manual_state = State::Safe;    break;
             case '1': manual_state = State::Alert;   break;
