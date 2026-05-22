@@ -29,3 +29,129 @@
   animation: signal-flow 2s linear infinite;
 }
 
+/* Glassmorphism panel */
+.hud-glass {
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.hud-glass-light {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+/* Slide active transitions */
+@keyframes slide-in-right {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-slide-in-right {
+  animation: slide-in-right 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Glowing dot animation */
+@keyframes pulse-glow {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7);
+  }
+  50% {
+    transform: scale(1.15);
+    box-shadow: 0 0 12px 4px rgba(34, 197, 94, 0.4);
+  }
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2s infinite;
+}
+
+/* Ambient background glow for Fest Mode */
+@keyframes ambient-glow {
+  0%, 100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+.bg-ambient-gradient {
+  background: linear-gradient(-45deg, #020617, #0f172a, #0b1329, #091a3c, #020617);
+  background-size: 400% 400%;
+  animation: ambient-glow 20s ease infinite;
+}
+
+.bg-ambient-gradient-light {
+  background: linear-gradient(-45deg, #f8fafc, #f1f5f9, #e2e8f0, #e0f2fe, #f8fafc);
+  background-size: 400% 400%;
+  animation: ambient-glow 20s ease infinite;
+}
+
+/* Hide scrollbar utility */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Technical grid pattern for simulation concrete block */
+.bg-building-pattern {
+  background-image: radial-gradient(rgba(255, 255, 255, 0.08) 1.5px, transparent 0);
+  background-size: 12px 12px;
+}
+
+@keyframes signal-flow-path {
+  to {
+    stroke-dashoffset: -30;
+  }
+}
+
+.animate-signal-flow-path {
+  animation: signal-flow-path 1.2s linear infinite;
+}
+
+/* Pulsing beacon */
+@keyframes beacon-pulse {
+  0% { transform: scale(0.8); opacity: 0.4; }
+  50% { transform: scale(1.3); opacity: 1; }
+  100% { transform: scale(0.8); opacity: 0.4; }
+}
+
+.animate-beacon {
+  animation: beacon-pulse 1.5s ease-in-out infinite;
+}
+
+/* Lightbox Animations */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes scaleUp {
+  from { transform: scale(0.95); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.2s ease-out forwards;
+}
+
+.animate-scale-up {
+  animation: scaleUp 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+
+
