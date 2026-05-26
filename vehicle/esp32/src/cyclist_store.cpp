@@ -6,12 +6,16 @@
 #include <string.h>
 
 namespace cyclist_store {
-    CyclistData cyclists[config::max_cyclists];
+
+    static CyclistData cyclists[config::max_cyclists];
+
+    // ── Slot management ──────────────────────────────────────────────────────
 
     int find_cyclist_by_mac(const uint8_t mac[6]) {
         for (uint8_t i = 0; i < config::max_cyclists; i++) {
-            if (cyclists[i].is_active && helpers::is_same_mac(cyclists[i].mac, mac))
+            if (cyclists[i].is_active && helpers::is_same_mac(cyclists[i].mac, mac)) {
                 return i;
+            }
         }
         return -1;
     }
@@ -36,7 +40,7 @@ namespace cyclist_store {
     }
 
     void remove_expired_cyclists() {
-        uint32_t now = millis();
+        const uint32_t now = millis();
         for (uint8_t i = 0; i < config::max_cyclists; i++) {
             if (cyclists[i].is_active &&
                 now - cyclists[i].last_seen_ms > config::cyclist_timeout_ms)
@@ -46,20 +50,75 @@ namespace cyclist_store {
         }
     }
 
-    // ── RSSI smoothing helper (shared by both packet types) ───────────────────
-    void update_rssi(int slot, bool has_rssi, int8_t rssi_dbm) {
-        bool  had_rssi  = cyclists[slot].has_rssi;
-        float prev_rssi = cyclists[slot].rssi_smoothed_dbm;
+    // ── RSSI smoothing ───────────────────────────────────────────────────────
+    // Only updates fields when the packet actually carried RSSI metadata —
+    // otherwise the previous reading is preserved.
+    static void update_rssi(int slot, bool has_rssi, int8_t rssi_dbm) {
+        if (!has_rssi) return;
 
-        cyclists[slot].has_rssi = has_rssi;
+        const bool  had_rssi  = cyclists[slot].has_rssi;
+        const float prev_rssi = cyclists[slot].rssi_smoothed_dbm;
+
+        cyclists[slot].has_rssi = true;
         cyclists[slot].rssi_dbm = rssi_dbm;
+        cyclists[slot].rssi_smoothed_dbm = had_rssi
+            ? (config::rssi_smoothing_alpha * static_cast<float>(rssi_dbm) +
+               (1.0f - config::rssi_smoothing_alpha) * prev_rssi)
+            : static_cast<float>(rssi_dbm);
+    }
 
-        if (has_rssi) {
-            cyclists[slot].rssi_smoothed_dbm = had_rssi
-                ? (config::rssi_smoothing_alpha * static_cast<float>(rssi_dbm) +
-                   (1.0f - config::rssi_smoothing_alpha) * prev_rssi)
-                : static_cast<float>(rssi_dbm);
+    // ── Packet parsing ───────────────────────────────────────────────────────
+
+    // Fields parsed out of the JSON before any slot is touched.
+    struct ParsedPacket {
+        bool   is_remote     = false;
+        State  cyclist_state = State::Safe;   // remote
+        double lat           = 0.0;           // gps
+        double lng           = 0.0;           // gps
+        float  speed_kmph    = 0.0f;          // gps
+    };
+
+    static bool validate_remote(const JsonDocument& doc, ParsedPacket& out) {
+        if (!doc["cri"].is<int>()) {
+            Serial.println("Rejected remote packet: missing cri");
+            return false;
         }
+        switch (doc["cri"].as<int>()) {
+            case 0: out.cyclist_state = State::Safe;    break;
+            case 1: out.cyclist_state = State::Alert;   break;
+            case 2: out.cyclist_state = State::Warning; break;
+            case 3: out.cyclist_state = State::Danger;  break;
+            default:
+                Serial.println("Rejected remote packet: invalid cri");
+                return false;
+        }
+        out.is_remote = true;
+        return true;
+    }
+
+    static bool validate_gps(const JsonDocument& doc, ParsedPacket& out) {
+        if (!doc["lat"].is<double>() || !doc["lng"].is<double>()) {
+            Serial.println("Rejected packet: missing lat/lng");
+            return false;
+        }
+
+        out.lat        = doc["lat"].as<double>();
+        out.lng        = doc["lng"].as<double>();
+        out.speed_kmph = doc["speed"] | 0.0f;
+
+        if (!helpers::is_valid_coordinate(out.lat, out.lng)) {
+            Serial.println("Rejected packet: invalid coordinates");
+            return false;
+        }
+        if (out.speed_kmph < 0.0f ||
+            out.speed_kmph > config::max_reasonable_cyclist_speed_kmph)
+        {
+            Serial.println("Rejected packet: invalid speed");
+            return false;
+        }
+
+        out.is_remote = false;
+        return true;
     }
 
     bool parse_cyclist_packet(
@@ -68,75 +127,67 @@ namespace cyclist_store {
         bool has_rssi,
         int8_t rssi_dbm
     ) {
-        // Bump buffer slightly for the larger GPS packet (13 fields).
+        // 384 bytes is enough headroom for the larger GPS packet (~13 fields).
         StaticJsonDocument<384> doc;
-        DeserializationError error = deserializeJson(doc, json);
+        const DeserializationError error = deserializeJson(doc, json);
         if (error) {
             Serial.print("Bad JSON: ");
             Serial.println(error.c_str());
             return false;
         }
 
+        // ── Validate before touching any slot ────────────────────────────────
+        // Critical: a packet that fails validation must NOT mutate the store,
+        // otherwise a bad packet can evict a healthy cyclist via the oldest-slot
+        // path and then be thrown away.
+        ParsedPacket parsed;
         const char* packet_mode = doc["mode"] | "";
 
-        // ── Find or allocate slot ─────────────────────────────────────────────
-        int index = find_cyclist_by_mac(mac);
-        if (index < 0) index = find_free_cyclist_slot();
-        if (index < 0) index = find_oldest_cyclist_slot();
+        if (strcmp(packet_mode, "remote") == 0) {
+            if (!validate_remote(doc, parsed)) return false;
+        } else {
+            // Backwards-compatible: missing "mode" → GPS packet.
+            if (!validate_gps(doc, parsed)) return false;
+        }
 
-        cyclists[index].is_active = true;
+        // ── Allocate slot ────────────────────────────────────────────────────
+        int        index      = find_cyclist_by_mac(mac);
+        const bool is_new_mac = (index < 0);
+
+        if (is_new_mac) {
+            index = find_free_cyclist_slot();
+            if (index < 0) index = find_oldest_cyclist_slot();
+            // Full reset when claiming a slot for a different MAC — prevents
+            // the previous cyclist's RSSI/GPS/remote state from bleeding into
+            // the new one (especially the EMA-smoothed RSSI).
+            cyclists[index] = CyclistData{};
+        }
+
+        // ── Commit ───────────────────────────────────────────────────────────
+        cyclists[index].is_active    = true;
         memcpy(cyclists[index].mac, mac, 6);
         cyclists[index].last_seen_ms = millis();
-
         update_rssi(index, has_rssi, rssi_dbm);
 
-        // ── Remote packet: {"mode":"remote","cri":0|1|2|3} ───────────────────
-        if (strcmp(packet_mode, "remote") == 0) {
-            if (!doc["cri"].is<int>()) {
-                Serial.println("Rejected remote packet: missing cri");
-                return false;
-            }
-
+        if (parsed.is_remote) {
             cyclists[index].has_cyclist_state = true;
-            switch (doc["cri"].as<int>()) {
-                case 1: cyclists[index].cyclist_state = State::Alert;   break;
-                case 2: cyclists[index].cyclist_state = State::Warning; break;
-                case 3: cyclists[index].cyclist_state = State::Danger;  break;
-                default: cyclists[index].cyclist_state = State::Safe;   break;
-            }
-            return true;
+            cyclists[index].cyclist_state     = parsed.cyclist_state;
+            // The cyclist has switched to broadcasting remote state — any
+            // previously cached GPS coordinates are no longer trustworthy.
+            cyclists[index].has_gps_data      = false;
+        } else {
+            cyclists[index].has_gps_data      = true;
+            cyclists[index].lat               = parsed.lat;
+            cyclists[index].lng               = parsed.lng;
+            cyclists[index].speed_kmph        = parsed.speed_kmph;
+            cyclists[index].has_cyclist_state = false;
+            cyclists[index].cyclist_state     = State::Safe;
         }
 
-        // ── GPS packet: {"mode":"gps","lat":...,"lng":...,...} ────────────────
-        // Also accepts packets with no "mode" field for backwards compatibility.
-        if (!doc["lat"].is<double>() || !doc["lng"].is<double>()) {
-            Serial.println("Rejected packet: missing lat/lng");
-            return false;
-        }
-
-        double lat        = doc["lat"].as<double>();
-        double lng        = doc["lng"].as<double>();
-        float  speed_kmph = doc["speed"] | 0.0f;
-
-        if (!helpers::is_valid_coordinate(lat, lng)) {
-            Serial.println("Rejected packet: invalid coordinates");
-            return false;
-        }
-
-        if (speed_kmph < 0.0f ||
-            speed_kmph > config::max_reasonable_cyclist_speed_kmph)
-        {
-            Serial.println("Rejected packet: invalid speed");
-            return false;
-        }
-
-        cyclists[index].lat               = lat;
-        cyclists[index].lng               = lng;
-        cyclists[index].speed_kmph        = speed_kmph;
-        cyclists[index].has_cyclist_state = false;
-        cyclists[index].cyclist_state     = State::Safe;
         return true;
     }
+
+    // ── Accessors ────────────────────────────────────────────────────────────
 
     CyclistsData get_cyclists_data() {
         CyclistsData data;

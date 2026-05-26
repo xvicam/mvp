@@ -10,21 +10,23 @@
 #include <string.h>
 
 namespace esp_now_receiver {
+
     struct PendingPacket {
-        bool is_available = false;
-        bool has_overflow = false;
-        uint8_t mac[6] = {0};
-        char data[config::max_packet_size] = {0};
-        int len = 0;
-        bool has_rssi = false;
-        int8_t rssi_dbm = 0;
+        bool    is_available = false;
+        bool    has_overflow = false;
+        uint8_t mac[6]       = {0};
+        char    data[config::max_packet_size] = {0};
+        int     len          = 0;
+        bool    has_rssi     = false;
+        int8_t  rssi_dbm     = 0;
     };
 
-    PendingPacket pending_packet;
-    portMUX_TYPE packet_mux = portMUX_INITIALIZER_UNLOCKED;
+    static PendingPacket pending_packet;
+    static portMUX_TYPE  packet_mux = portMUX_INITIALIZER_UNLOCKED;
 
-    // ── AES-128-CBC decryption ────────────────────────────────────────────────
+    // ── AES-128-CBC ───────────────────────────────────────────────────────────
     // Key and IV must match send_encrypted() on the cyclist side exactly.
+
     static const unsigned char kAesKey[16] = {
         'V','I','C','A','M','_','E','S','P','_','S','E','C','R','E','T'
     };
@@ -33,7 +35,8 @@ namespace esp_now_receiver {
     };
 
     // Decrypts `len` bytes of ciphertext (must be a positive multiple of 16)
-    // into `output` (null-terminated on success). Returns true on success.
+    // into `output`. The cyclist null-terminates the plaintext before
+    // encrypting, so the result is a valid C string on success.
     static bool decrypt_packet(
         const uint8_t* ciphertext, int len,
         char* output, size_t output_size
@@ -46,11 +49,11 @@ namespace esp_now_receiver {
         mbedtls_aes_init(&aes);
         mbedtls_aes_setkey_dec(&aes, kAesKey, 128);
 
-        // CBC modifies the IV in-place; copy so kAesIv stays pristine for the next call.
+        // CBC modifies the IV in-place; copy so kAesIv stays pristine.
         unsigned char iv[16];
         memcpy(iv, kAesIv, 16);
 
-        int ret = mbedtls_aes_crypt_cbc(
+        const int ret = mbedtls_aes_crypt_cbc(
             &aes, MBEDTLS_AES_DECRYPT, len,
             iv, ciphertext, reinterpret_cast<unsigned char*>(output)
         );
@@ -58,24 +61,28 @@ namespace esp_now_receiver {
 
         if (ret != 0) return false;
 
-        // The cyclist null-terminates the plaintext before encrypting,
-        // so the decrypted buffer is already a valid C string.
-        // Force the final byte as a belt-and-braces guard.
+        // Belt-and-braces null terminator at the final byte.
         output[len - 1] = '\0';
         return true;
     }
 
-    void on_receive(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
+    // ── Receive callback (runs in WiFi task context) ─────────────────────────
+
+    static void on_receive(
+        const esp_now_recv_info_t* info,
+        const uint8_t* data,
+        int len
+    ) {
         if (!info || !data || len <= 0) return;
 
         portENTER_CRITICAL_ISR(&packet_mux);
 
-        if (len >= config::max_packet_size) {
+        if (len >= static_cast<int>(config::max_packet_size)) {
             pending_packet.has_overflow = true;
         } else {
             memcpy(pending_packet.mac, info->src_addr, 6);
             memcpy(pending_packet.data, data, len);  // raw ciphertext
-            pending_packet.len = len;
+            pending_packet.len          = len;
             pending_packet.is_available = true;
             if (info->rx_ctrl) {
                 pending_packet.has_rssi = true;
@@ -89,6 +96,8 @@ namespace esp_now_receiver {
         portEXIT_CRITICAL_ISR(&packet_mux);
     }
 
+    // ── Public API ───────────────────────────────────────────────────────────
+
     bool init_esp_now_receiver() {
         WiFi.mode(WIFI_STA);
         WiFi.disconnect();
@@ -97,6 +106,13 @@ namespace esp_now_receiver {
 
         esp_now_register_recv_cb(on_receive);
         return true;
+    }
+
+    void deinit_esp_now_receiver() {
+        esp_now_deinit();
+        WiFi.disconnect(true);
+        WiFi.mode(WIFI_OFF);
+        delay(100);
     }
 
     void process_pending_packet() {
@@ -108,9 +124,11 @@ namespace esp_now_receiver {
         pending_packet.has_overflow = false;
         portEXIT_CRITICAL(&packet_mux);
 
+        // Overflow is reported independently. A valid packet may also be queued
+        // in the same snapshot (oversized packets don't clear is_available),
+        // so we fall through and continue.
         if (local.has_overflow) {
             Serial.println("Rejected ESP-NOW packet: too large");
-            return;
         }
 
         if (!local.is_available) return;
@@ -123,7 +141,6 @@ namespace esp_now_receiver {
             return;
         }
 
-        // Decrypt into a fresh plaintext buffer — never touch local.data for parsing.
         char plaintext[config::max_packet_size] = {0};
         if (!decrypt_packet(
             reinterpret_cast<const uint8_t*>(local.data),
@@ -145,7 +162,6 @@ namespace esp_now_receiver {
             Serial.print(local.rssi_dbm);
             Serial.print(" dBm");
         }
-
         Serial.println();
 
         cyclist_store::parse_cyclist_packet(
